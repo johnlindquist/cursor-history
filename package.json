@@ -13,7 +13,8 @@
     "@oclif/plugin-help": "^6",
     "@oclif/plugin-plugins": "^5",
     "better-sqlite3": "^11.8.1",
-    "clipboardy": "^4.0.0"
+    "clipboardy": "^4.0.0",
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "@eslint/compat": "^1",
@@ -70,7 +71,7 @@
   "repository": "johnlindquist/cursor-history",
   "scripts": {
     "build": "shx rm -rf dist && tsc -b",
-    "lint": "eslint",
+    "lint": "pnpm eslint . --fix",
     "postpack": "shx rm -f oclif.manifest.json",
     "posttest": "pnpm run lint",
     "prepack": "oclif manifest && oclif readme",

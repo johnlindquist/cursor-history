@@ -15,13 +15,13 @@ export interface ToolCall {
 }
 
 export interface FileChange {
-  modified: string[]
-  original: {
-    endLineNumberExclusive: number
-    startLineNumber: number
-  }
   uri: {
     path: string
+  }
+  modified: string[]
+  original: {
+    startLineNumber: number
+    endLineNumberExclusive: number
   }
 }
 
@@ -53,12 +53,14 @@ export interface Message {
 export interface ConversationData {
   composerId: string
   context?: {
-    fileSelections?: Selection[]
-    selections?: Selection[]
-    terminalSelections?: Selection[]
+    fileSelections?: Array<{file: string; selection?: string}>
+    selections?: Array<{text: string}>
+    terminalSelections?: Array<{text: string}>
   }
   conversation: Message[]
   createdAt: number
   richText?: string
   text?: string
+  workspaceName?: string // Name of the workspace this conversation belongs to
+  workspacePath?: string // Full path to the workspace
 }

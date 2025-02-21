@@ -1,11 +1,12 @@
-import {Command} from '@oclif/core'
 import search from '@inquirer/search'
+import {Command} from '@oclif/core'
 import clipboardy from 'clipboardy'
 import {writeFileSync} from 'node:fs'
-import {join} from 'node:path'
 import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import type {ConversationData} from '../../types.js'
+
 import {extractGlobalConversations} from '../../db/extract-conversations.js'
 import {formatConversation} from '../../utils/formatting.js'
 
@@ -17,32 +18,7 @@ export default class Search extends Command {
 Interactively search and view conversations from Cursor's global storage database
 `,
   ]
-
-  private conversations: ConversationData[] = []
-
-  private getDisplayName(conversation: ConversationData): string {
-    const date = new Date(conversation.createdAt).toLocaleString()
-    const preview = conversation.conversation[0]?.text?.slice(0, 100) || 'No preview available'
-    return `${date} - ${preview}...`
-  }
-
-  private async searchConversations(
-    term: string | undefined,
-  ): Promise<Array<{value: ConversationData; name: string; description: string}>> {
-    if (!term) return []
-
-    const termLower = term.toLowerCase()
-    return this.conversations
-      .filter((conv) => {
-        const text = conv.conversation[0]?.text?.toLowerCase() || ''
-        return text.includes(termLower)
-      })
-      .map((conv) => ({
-        value: conv,
-        name: this.getDisplayName(conv),
-        description: new Date(conv.createdAt).toLocaleString(),
-      }))
-  }
+private conversations: ConversationData[] = []
 
   async run(): Promise<void> {
     this.log('Loading conversations...')
@@ -72,5 +48,29 @@ Interactively search and view conversations from Cursor's global storage databas
 
     this.log(`\nConversation exported to: ${outputPath}`)
     this.log('Content has been copied to clipboard.')
+  }
+
+  private getDisplayName(conversation: ConversationData): string {
+    const date = new Date(conversation.createdAt).toLocaleString()
+    const preview = conversation.conversation[0]?.text?.slice(0, 100) || 'No preview available'
+    return `${date} - ${preview}...`
+  }
+
+  private async searchConversations(
+    term: string | undefined,
+  ): Promise<Array<{description: string; name: string; value: ConversationData;}>> {
+    if (!term) return []
+
+    const termLower = term.toLowerCase()
+    return this.conversations
+      .filter((conv) => {
+        const text = conv.conversation[0]?.text?.toLowerCase() || ''
+        return text.includes(termLower)
+      })
+      .map((conv) => ({
+        description: new Date(conv.createdAt).toLocaleString(),
+        name: this.getDisplayName(conv),
+        value: conv,
+      }))
   }
 }

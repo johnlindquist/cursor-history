@@ -1,4 +1,4 @@
-import type {CodeBlock, ConversationData, FileChange, Message, Selection, ToolCall} from '../types.js'
+import type {ConversationData, FileChange, Message} from '../types.js'
 
 /**
  * Formats a numeric timestamp into an ISO string.
@@ -134,6 +134,16 @@ export function formatMessage(message: Message): null | string {
  */
 export function formatConversation(data: ConversationData): string {
   let output = `# Conversation ${data.composerId}\n\n`
+
+  if (data.workspaceName) {
+    output += `**Workspace:** ${data.workspaceName}\n`
+    if (data.workspacePath) {
+      output += `**Path:** ${data.workspacePath}\n`
+    }
+
+    output += '\n'
+  }
+
   output += `Created: ${new Date(data.createdAt).toISOString()}\n\n`
 
   if (data.context) {

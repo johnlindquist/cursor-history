@@ -1,6 +1,6 @@
 import {Command} from '@oclif/core'
-import {join} from 'node:path'
 import {writeFileSync} from 'node:fs'
+import {join} from 'node:path'
 
 import {extractGlobalConversations} from '../../db/extract-conversations.js'
 import {createOutputDir} from '../../utils/file-system.js'
