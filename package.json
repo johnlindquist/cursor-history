@@ -73,7 +73,8 @@
     "posttest": "pnpm run lint",
     "prepack": "oclif manifest && oclif readme",
     "test": "mocha --forbid-only \"test/**/*.test.ts\"",
-    "version": "oclif readme && git add README.md"
+    "version": "oclif readme && git add README.md",
+    "postinstall": "node-gyp rebuild"
   },
   "types": "dist/index.d.ts",
   "pnpm": {
@@ -81,5 +82,6 @@
       "better-sqlite3",
       "sqlite3"
     ]
-  }
+  },
+  "gypfile": true
 }
