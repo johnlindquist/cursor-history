@@ -86,11 +86,6 @@
       "allowedVersions": {
         "@types/node": ">=16"
       }
-    },
-    "overrides": {
-      "better-sqlite3@*>prebuild-install": {
-        "runtime": "napi"
-      }
     }
   }
 }
