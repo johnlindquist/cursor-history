@@ -48,7 +48,7 @@ $ npm install -g @johnlindquist/cursor-history
 $ chi COMMAND
 running command...
 $ chi (--version)
-@johnlindquist/cursor-history/0.0.12 darwin-arm64 node-v23.4.0
+@johnlindquist/cursor-history/0.0.13 linux-x64 node-v20.18.2
 $ chi --help [COMMAND]
 USAGE
   $ chi COMMAND
