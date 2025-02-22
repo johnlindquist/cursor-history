@@ -1,7 +1,7 @@
+import Database from 'better-sqlite3'
 import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import {platform} from 'node:os'
 import {basename, join} from 'node:path'
-import {Database} from './db/sqlite-wrapper.js'
 
 interface ConversationInfo {
   createdAt: number
@@ -121,7 +121,7 @@ function getWorkspaceInfo(workspaceId: string): null | {name: string; path: stri
   return null
 }
 
-async function extractConversations(workspaceId: string): Promise<ConversationInfo[]> {
+function extractConversations(workspaceId: string): ConversationInfo[] {
   const conversations: ConversationInfo[] = []
   const dbPath = getWorkspaceDbPath(workspaceId)
   const workspaceInfo = getWorkspaceInfo(workspaceId)
@@ -131,12 +131,19 @@ async function extractConversations(workspaceId: string): Promise<ConversationIn
     return []
   }
 
-  let db: Database | null = null
+  let db: Database.Database | null = null
   try {
     db = new Database(dbPath, {fileMustExist: true, readonly: true})
 
     // Get composer data which contains conversations
-    const composerData = await db.prepare(`SELECT value FROM ItemTable WHERE key = 'composer.composerData'`).get()
+    const composerData = db
+      .prepare(
+        `
+      SELECT value FROM ItemTable 
+      WHERE key = 'composer.composerData'
+    `,
+      )
+      .get() as undefined | {value: string}
 
     if (!composerData) return []
 
@@ -162,7 +169,7 @@ async function extractConversations(workspaceId: string): Promise<ConversationIn
   } catch (error) {
     console.error(`Error processing workspace ${workspaceId}:`, error)
   } finally {
-    if (db) await db.close()
+    db?.close()
   }
 
   return conversations
@@ -176,7 +183,7 @@ async function main() {
 
   // Get conversations from each workspace
   for (const id of fsWorkspaceIds) {
-    const conversations = await extractConversations(id)
+    const conversations = extractConversations(id)
     allConversations.push(...conversations)
   }
 

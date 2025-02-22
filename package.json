@@ -1,7 +1,7 @@
 {
   "name": "@johnlindquist/cursor-history",
   "description": "A new CLI generated with oclif",
-  "version": "0.0.6",
+  "version": "0.0.4",
   "author": "John Lindquist",
   "bin": {
     "chi": "./bin/run.js"
@@ -12,10 +12,11 @@
     "@oclif/core": "^4",
     "@oclif/plugin-help": "^6",
     "@oclif/plugin-plugins": "^5",
-    "@vscode/sqlite3": "^5.1.7",
+    "better-sqlite3": "^11.8.1",
     "clipboardy": "^4.0.0",
     "conf": "^13.1.0",
-    "ora": "^8.2.0"
+    "ora": "^8.2.0",
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "@eslint/compat": "^1",
@@ -76,6 +77,9 @@
   },
   "types": "dist/index.d.ts",
   "pnpm": {
-    "onlyBuiltDependencies": []
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "sqlite3"
+    ]
   }
 }
