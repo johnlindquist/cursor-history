@@ -1,7 +1,7 @@
 {
   "name": "@johnlindquist/cursor-history",
   "description": "A new CLI generated with oclif",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "author": "John Lindquist",
   "bin": {
     "chi": "./bin/run.js"
