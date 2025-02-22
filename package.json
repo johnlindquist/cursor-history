@@ -1,5 +1,5 @@
 {
-  "name": "cursor-history",
+  "name": "@johnlindquist/cursor-history",
   "description": "A new CLI generated with oclif",
   "version": "0.0.0",
   "author": "John Lindquist",
