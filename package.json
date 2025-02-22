@@ -88,10 +88,8 @@
       }
     },
     "overrides": {
-      "better-sqlite3": {
-        "prebuild-install": {
-          "runtime": "napi"
-        }
+      "better-sqlite3@*>prebuild-install": {
+        "runtime": "napi"
       }
     }
   }
