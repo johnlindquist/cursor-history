@@ -10,9 +10,37 @@ A new CLI generated with oclif
 
 
 <!-- toc -->
+* [Installation](#installation)
 * [Usage](#usage)
 * [Commands](#commands)
 <!-- tocstop -->
+
+# Installation
+
+```sh-session
+$ pnpm add -g @johnlindquist/cursor-history
+```
+
+## Troubleshooting Installation
+
+If you encounter issues with native module builds (particularly with better-sqlite3), try the following:
+
+1. Ensure node-gyp is installed globally:
+```sh-session
+$ pnpm install -g node-gyp
+```
+
+2. Install with prebuilds enabled:
+```sh-session
+$ PNPM_ENABLE_PREBUILDS=true pnpm add -g @johnlindquist/cursor-history
+```
+
+3. If still having issues, try rebuilding better-sqlite3:
+```sh-session
+$ cd $(pnpm root -g)/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
+$ pnpm rebuild
+```
+
 # Usage
 <!-- usage -->
 ```sh-session

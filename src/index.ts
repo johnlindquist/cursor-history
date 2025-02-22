@@ -7,7 +7,7 @@ import {join} from 'node:path'
 
 import type {ConversationData} from './types.js'
 
-import {extractGlobalConversations} from './db/extract-conversations.js'
+import {extractGlobalConversations, getLatestConversation} from './db/extract-conversations.js'
 import {getConversationsPath, getOutputDir} from './utils/config.js'
 import {formatConversation, generateConversationFilename} from './utils/formatting.js'
 
@@ -39,6 +39,22 @@ Interactively search and view conversations`,
   }
   private conversations: ConversationData[] = []
 
+  private async exportConversation(conversation: ConversationData): Promise<void> {
+    const markdown = formatConversation(conversation)
+
+    // Write to temp file
+    const tempDir = tmpdir()
+    const filename = generateConversationFilename(conversation)
+    const outputPath = join(tempDir, filename)
+    writeFileSync(outputPath, markdown)
+
+    // Copy to clipboard
+    await clipboardy.write(markdown)
+
+    this.log(`\nConversation exported to: ${outputPath}`)
+    this.log('Content has been copied to clipboard.')
+  }
+
   async run(): Promise<void> {
     const {flags} = await this.parse(CursorHistory)
 
@@ -47,22 +63,27 @@ Interactively search and view conversations`,
       return
     }
 
-    // Default to search if no flags provided
-    if (!flags.extract && !flags.search) {
-      flags.search = true
-    }
+    if (flags.extract || flags.search) {
+      this.conversations = await extractGlobalConversations()
 
-    this.conversations = await extractGlobalConversations()
+      if (!this.conversations || this.conversations.length === 0) {
+        this.log('No conversations found.')
+        return
+      }
 
-    if (!this.conversations || this.conversations.length === 0) {
-      this.log('No conversations found.')
-      return
-    }
-
-    if (flags.extract) {
-      await this.extractConversations()
-    } else if (flags.search) {
-      await this.searchConversations()
+      if (flags.extract) {
+        await this.extractConversations()
+      } else if (flags.search) {
+        await this.searchConversations()
+      }
+    } else {
+      // Default behavior: get latest conversation
+      const latestConversation = await getLatestConversation()
+      if (!latestConversation) {
+        this.log('No conversations found.')
+        return
+      }
+      await this.exportConversation(latestConversation)
     }
   }
 
@@ -109,19 +130,7 @@ Interactively search and view conversations`,
       source: async (term) => this.searchConversationSource(term),
     })
 
-    const markdown = formatConversation(selectedConversation)
-
-    // Write to temp file
-    const tempDir = tmpdir()
-    const filename = generateConversationFilename(selectedConversation)
-    const outputPath = join(tempDir, filename)
-    writeFileSync(outputPath, markdown)
-
-    // Copy to clipboard
-    await clipboardy.write(markdown)
-
-    this.log(`\nConversation exported to: ${outputPath}`)
-    this.log('Content has been copied to clipboard.')
+    await this.exportConversation(selectedConversation)
   }
 
   private async searchConversationSource(

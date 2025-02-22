@@ -66,6 +66,7 @@
   "repository": "johnlindquist/cursor-history",
   "scripts": {
     "build": "shx rm -rf dist && tsc -b",
+    "default": "pnpm build && ./bin/run.js",
     "extract": "pnpm build && ./bin/run.js --extract",
     "search": "pnpm build && ./bin/run.js --search",
     "lint": "pnpm eslint . --fix",
@@ -80,6 +81,18 @@
     "onlyBuiltDependencies": [
       "better-sqlite3",
       "sqlite3"
-    ]
+    ],
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "@types/node": ">=16"
+      }
+    },
+    "overrides": {
+      "better-sqlite3": {
+        "prebuild-install": {
+          "runtime": "napi"
+        }
+      }
+    }
   }
 }

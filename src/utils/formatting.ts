@@ -45,6 +45,23 @@ export function formatMessage(message: Message): null | string {
 
   let output = `### ${role}\n\n`
 
+  // Add timing information if available
+  if (message.timingInfo) {
+    const {clientEndTime, clientStartTime} = message.timingInfo
+    if (clientStartTime && clientEndTime) {
+      const formattedStart = new Date(clientStartTime).toLocaleString()
+      const formattedEnd = new Date(clientEndTime).toLocaleString()
+      const duration = (clientEndTime - clientStartTime) / 1000 // Convert to seconds
+
+      output += `⏱️ `
+      if (formattedStart === formattedEnd) {
+        output += `${formattedStart} (instant)\n\n`
+      } else {
+        output += `${duration.toFixed(1)}s • ${formattedStart} → ${formattedEnd}\n\n`
+      }
+    }
+  }
+
   if (hasText) {
     output += `${message.text?.trim()}\n\n`
   }
@@ -138,151 +155,69 @@ export function formatMessage(message: Message): null | string {
           output += `// Block Index: ${block.codeBlockIdx}\n`
         }
 
+        if (block.isGenerating) {
+          output += '// Status: Generating...\n'
+        }
+
         output += '\n'
 
-        output += content?.trim() ? content.trim() : '// Content not available'
+        if (content?.trim()) {
+          output += content.trim()
+        } else {
+          // Provide more context about why content is not available
+          const reasons = []
+          if (!block.content && !block.code) reasons.push('No content or code property')
+          if (block.isGenerating) reasons.push('Content is still generating')
+          output += `// Content not available: ${reasons.join(', ') || 'Unknown reason'}`
+        }
 
         output += '\n```\n\n'
       } else if (content) {
-        output += `\`\`\`${language.toLowerCase()}\n`
-        output += content.trim()
-        output += '\n```\n\n'
-      }
-
-      if (block.isGenerating) {
-        output += '_Generating..._\n\n'
+        output += `\`\`\`${language.toLowerCase()}\n${content.trim()}\n\`\`\`\n\n`
       }
     }
   }
 
-  if (hasToolCalls) {
-    for (const [index, call] of message.toolCalls!.entries()) {
-      if (call && typeof call === 'object') {
-        output += `**Tool Call ${index + 1}:**\n`
-        output += `- Type: ${call.type || 'unknown'}\n`
-
-        if (call.name) output += `- Function: \`${call.name}\`\n`
-
-        if (call.parameters) {
-          output += '- Parameters:\n'
-          for (const [key, value] of Object.entries(call.parameters)) {
-            output += `  - \`${key}\`: ${JSON.stringify(value)}\n`
-          }
-        }
-
-        if (call.result) {
-          const resultStr = typeof call.result === 'string' ? call.result : JSON.stringify(call.result)
-          output += `- Result: ${resultStr.length > 100 ? resultStr.slice(0, 100) + '...' : resultStr}\n`
-        }
-
-        output += '\n'
-      }
-    }
-  }
-
-  if (message.timingInfo) {
-    const start = formatTimestamp(message.timingInfo.startTime)
-    const end = formatTimestamp(message.timingInfo.endTime)
-    if (start && end) {
-      output += `_${start} - ${end}_\n\n`
-    }
-  }
-
-  output += '---\n'
-  return output.trim()
+  return output
 }
 
 /**
- * Convert a string to a URL-friendly slug
+ * Formats a conversation into Markdown.
  */
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, '-') // Replace non-alphanumeric chars with hyphens
-    .replaceAll(/^-+|-+$/g, '') // Remove leading/trailing hyphens
-    .slice(0, 100) // Limit length
+export function formatConversation(conversation: ConversationData): string {
+  let output = ''
+
+  // Add header with conversation info
+  const date = new Date(conversation.createdAt).toLocaleString()
+  output += `# ${conversation.name || 'Unnamed Conversation'}\n\n`
+  output += `_Created: ${date}_\n\n`
+
+  if (conversation.workspaceName) {
+    output += `_Workspace: \`${conversation.workspaceName}\`_\n\n`
+  }
+
+  // Format each message
+  for (const message of conversation.conversation) {
+    const formatted = formatMessage(message)
+    if (formatted) {
+      output += formatted
+    }
+  }
+
+  return output
 }
 
 /**
- * Generate a descriptive filename for a conversation
+ * Generates a filename for a conversation based on its metadata.
  */
-export function generateConversationFilename(data: ConversationData): string {
-  const date = new Date(data.createdAt)
+export function generateConversationFilename(conversation: ConversationData): string {
+  const date = new Date(conversation.createdAt)
   const dateStr = date.toISOString().split('T')[0]
-  const timeStr = `${date.getHours().toString().padStart(2, '0')}${date.getMinutes().toString().padStart(2, '0')}`
-  const workspace = data.workspaceName || 'unknown-workspace'
-  const title = data.name || `Conversation ${data.composerId}`
+  const name = conversation.name || 'unnamed'
+  const sanitizedName = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
 
-  return `${slugify(workspace)}-${dateStr}-${timeStr}-${slugify(title)}-${data.composerId}.md`
-}
-
-/**
- * Formats an entire conversation into a Markdown document.
- */
-export function formatConversation(data: ConversationData): string {
-  let output = `# ${data.name || `Conversation ${data.composerId}`}\n\n`
-
-  if (data.workspaceName) {
-    output += `**Workspace:** ${data.workspaceName}\n`
-    if (data.workspacePath) {
-      output += `**Path:** ${data.workspacePath}\n`
-    }
-
-    output += '\n'
-  }
-
-  output += `Created: ${new Date(data.createdAt).toISOString()}\n\n`
-
-  if (data.context) {
-    if (Array.isArray(data.context.fileSelections) && data.context.fileSelections.length > 0) {
-      output += '## File Selections\n\n'
-      for (const selection of data.context.fileSelections) {
-        if (selection && selection.file) {
-          const selectionText = selection.selection || 'No selection text'
-          output += `- ${selection.file}: ${selectionText}\n`
-        }
-      }
-
-      output += '\n'
-    }
-
-    if (Array.isArray(data.context.selections) && data.context.selections.length > 0) {
-      output += '## Code Selections\n\n'
-      for (const selection of data.context.selections) {
-        if (selection && selection.text) {
-          output += `\`\`\`\n${selection.text.trim()}\n\`\`\`\n`
-        }
-      }
-
-      output += '\n'
-    }
-
-    if (Array.isArray(data.context.terminalSelections) && data.context.terminalSelections.length > 0) {
-      output += '## Terminal Output\n\n'
-      for (const selection of data.context.terminalSelections) {
-        if (selection && selection.text) {
-          output += `\`\`\`\n${selection.text.trim()}\n\`\`\`\n`
-        }
-      }
-
-      output += '\n'
-    }
-  }
-
-  if (Array.isArray(data.conversation) && data.conversation.length > 0) {
-    output += '## Messages\n\n'
-    const formattedMessages = data.conversation
-      .map((msg: Message) => msg && formatMessage(msg))
-      .filter((msg): msg is string => msg !== null)
-    if (formattedMessages.length > 0) {
-      output += formattedMessages.join('\n')
-      output += '\n'
-    } else {
-      output += '_No messages with content in conversation_\n\n'
-    }
-  } else {
-    output += '## Messages\n\n_No messages in conversation_\n\n'
-  }
-
-  return output.trim()
+  return `${dateStr}-${sanitizedName}.md`
 }

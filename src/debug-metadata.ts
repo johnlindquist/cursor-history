@@ -6,20 +6,23 @@ import {join} from 'node:path'
 import type {CodeBlockAnalysis, ConversationAnalysis, Message, MessageAnalysisResult} from './types.js'
 
 interface CodeBlock {
-  code: string
-  codeBlockIdx?: number
+  [key: string]: unknown
   content?: string
   end?: number
-  file?: string
-  isGenerating?: boolean
   language?: string
   start?: number
   uri?: {
-    external?: string
-    fsPath?: string
+    [key: string]: unknown
     path: string
-    scheme?: string
   }
+}
+
+interface DiffChange {
+  original: {
+    startLineNumber: number
+    endLineNumberExclusive: number
+  }
+  modified: string[]
 }
 
 function getCursorDbPath(): string {
@@ -228,7 +231,7 @@ function analyzeCodeBlock(block: Partial<CodeBlock> | string): CodeBlockAnalysis
     parsedBlock = block
   }
 
-  const content = parsedBlock.content || parsedBlock.code || ''
+  const content = (parsedBlock.content || parsedBlock.code || '') as string
   const language = parsedBlock.language || 'unknown'
   const type = determineContentType(content, language)
 
@@ -247,12 +250,12 @@ function analyzeCodeBlock(block: Partial<CodeBlock> | string): CodeBlockAnalysis
     hasImports: /\b(import|require)\b/.test(content),
     hasJSX: /<[A-Z][A-Za-z]+[^>]*>/.test(content),
     hasMarkdown: content.includes('```') || content.includes('#') || content.includes('*'),
-    indentationLevel: content.match(/^(\s+)/)?.[1].length || 0,
+    indentationLevel: content.match(/^(\s+)/)?.[1]?.length || 0,
     lineCount: content ? content.split('\n').length : 0,
   }
 
   return {
-    content: content || undefined,
+    content,
     contentAnalysis,
     contentLength: content?.length || 0,
     fileContext,
@@ -392,6 +395,63 @@ function safeSlice(content: string | undefined, start: number, end: number): str
   return content.slice(start, end)
 }
 
+function processInlineDiffs(message: any): void {
+  // Skip if no checkpoint or diffs
+  if (!message.afterCheckpoint?.activeInlineDiffs?.length) return
+
+  // Process each code block
+  message.codeBlocks = message.codeBlocks || []
+
+  for (const diff of message.afterCheckpoint.activeInlineDiffs) {
+    const codeBlock = message.codeBlocks.find((block: any) => block.uri?.path === diff.uri?.path)
+
+    if (diff.newTextDiffWrtV0) {
+      const changes = diff.newTextDiffWrtV0.flatMap((change: DiffChange) => {
+        if (change.original && change.modified?.length) {
+          return [
+            `// Lines ${change.original.startLineNumber}-${change.original.endLineNumberExclusive}:`,
+            '// Original code removed',
+            '// New code:',
+            ...change.modified,
+            '', // Add spacing between changes
+          ]
+        }
+
+        return []
+      })
+
+      const content = changes.join('\n').trim()
+      const lastChange = diff.newTextDiffWrtV0.at(-1)
+      const firstChange = diff.newTextDiffWrtV0[0]
+
+      // Update existing block or create new one
+      if (codeBlock) {
+        codeBlock.content = content
+        codeBlock.language = codeBlock.uri.path.split('.').pop() || ''
+        // Preserve the line range if it exists
+        if (firstChange?.original) {
+          codeBlock.start = firstChange.original.startLineNumber
+          codeBlock.end = lastChange?.original.endLineNumberExclusive
+        }
+      } else {
+        const newBlock: CodeBlock = {
+          content,
+          language: diff.uri.path.split('.').pop() || '',
+          uri: diff.uri,
+        }
+
+        // Add line range if available
+        if (firstChange?.original) {
+          newBlock.start = firstChange.original.startLineNumber
+          newBlock.end = lastChange?.original.endLineNumberExclusive
+        }
+
+        message.codeBlocks.push(newBlock)
+      }
+    }
+  }
+}
+
 async function main() {
   const globalDbPath = getCursorDbPath()
   console.log('Global database path:', globalDbPath)
@@ -405,154 +465,74 @@ async function main() {
   try {
     db = new Database(globalDbPath, {readonly: true})
 
-    // List all tables
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()
-    console.log('\nTables in database:', tables)
-
     // Get all conversations and sort by creation date
     const items = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as {
       key: string
       value: string
     }[]
 
-    console.log('\nFound composer data keys:', items.length)
+    console.log('\nSearching through', items.length, 'conversations...')
 
-    // Parse all conversations and analyze their structure
-    const conversations: ConversationAnalysis[] = []
+    // Look for our specific message
     for (const item of items) {
       try {
         const data = JSON.parse(item.value)
         const messages = Array.isArray(data.conversation) ? data.conversation : []
-        const messageAnalyses: MessageAnalysisResult[] = []
 
-        for (const msg of messages) {
-          const analysis = analyzeMessage(msg)
-          messageAnalyses.push(analysis)
-        }
+        const targetMessage = messages.find((msg: any) => msg.bubbleId === '517fb770-cce6-4cca-ad42-d409342ac3b2')
+        if (targetMessage) {
+          console.log('\nFound message in conversation:', data.name || 'Unnamed')
+          console.log('Created:', new Date(data.createdAt).toLocaleString())
 
-        const contentTypes = {
-          code: 0,
-          text: 0,
-          unknown: 0,
-        }
+          // Process the diffs first
+          processInlineDiffs(targetMessage)
 
-        const fileReferences: Record<string, {count: number; hasLineRanges: boolean}> = {}
-        let generatingBlocks = 0
-        const languages = new Set<string>()
+          // Process the diffs
+          if (targetMessage.afterCheckpoint?.activeInlineDiffs?.length) {
+            console.log('\nProcessing diffs...')
+            for (const diff of targetMessage.afterCheckpoint.activeInlineDiffs) {
+              console.log(`\nDiff for file: ${diff.uri.path}`)
 
-        for (const msg of messageAnalyses) {
-          for (const block of msg.codeBlocks) {
-            if (block.type === 'code') contentTypes.code++
-            if (block.type === 'text') contentTypes.text++
-            if (block.type === 'unknown') contentTypes.unknown++
-
-            if (block.isGenerating) generatingBlocks++
-            if (block.language) languages.add(block.language)
-
-            if (block.fileContext?.path) {
-              const {path} = block.fileContext
-              if (!fileReferences[path]) {
-                fileReferences[path] = {count: 0, hasLineRanges: false}
-              }
-
-              fileReferences[path].count++
-              fileReferences[path].hasLineRanges =
-                fileReferences[path].hasLineRanges ||
-                (block.fileContext.lineStart !== undefined && block.fileContext.lineEnd !== undefined)
-            }
-          }
-        }
-
-        conversations.push({
-          contentAnalysis: {
-            contentTypes,
-            fileReferences,
-            generatingBlocks,
-            languages: [...languages],
-            messagesWithContent: messageAnalyses.filter((m) => !m.isEmpty).length,
-            totalCodeBlocks: messageAnalyses.reduce((sum, m) => sum + m.codeBlocks.length, 0),
-          },
-          createdAt: data.createdAt || 0,
-          id: data.composerId || '',
-          key: item.key,
-          messageCount: messages.length,
-          messages: messageAnalyses,
-          mode: data.unifiedMode || 'unknown',
-          name: data.name || 'Unnamed',
-        })
-      } catch (error) {
-        console.error(`Error parsing conversation data for key ${item.key}:`, error)
-      }
-    }
-
-    conversations.sort((a, b) => b.createdAt - a.createdAt)
-
-    // Print overall statistics
-    console.log('\nOverall Statistics:')
-    console.log(`Total Conversations: ${conversations.length}`)
-    console.log(
-      `Conversations with Message Content: ${
-        conversations.filter((c) => c.contentAnalysis.messagesWithContent > 0).length
-      }`,
-    )
-    console.log(
-      `Conversations with Code Blocks: ${conversations.filter((c) => c.contentAnalysis.totalCodeBlocks > 0).length}`,
-    )
-    console.log(`Total Code Blocks: ${conversations.reduce((sum, c) => sum + c.contentAnalysis.totalCodeBlocks, 0)}`)
-
-    const allLanguages = [...new Set(conversations.flatMap((c) => c.contentAnalysis.languages))]
-    console.log('\nLanguages Found:', allLanguages)
-
-    // Analyze recent conversations in detail
-    const samplesToAnalyze = 5
-    console.log(`\nAnalyzing ${samplesToAnalyze} Recent Conversations:`)
-
-    for (let i = 0; i < Math.min(samplesToAnalyze, conversations.length); i++) {
-      const conversation = conversations[i]
-      console.log(`\nConversation ${i + 1}:`)
-      console.log(`Name: ${conversation.name}`)
-      console.log(`Created: ${new Date(conversation.createdAt).toLocaleString()}`)
-      console.log(`Mode: ${conversation.mode}`)
-      console.log(`Messages: ${conversation.messageCount}`)
-      console.log(`Messages with Content: ${conversation.contentAnalysis.messagesWithContent}`)
-      console.log(`Total Code Blocks: ${conversation.contentAnalysis.totalCodeBlocks}`)
-
-      if (conversation.contentAnalysis.languages.length > 0) {
-        console.log('Languages:', conversation.contentAnalysis.languages)
-      }
-
-      // Show sample messages with content
-      for (const msg of conversation.messages) {
-        if (!msg.isEmpty || msg.codeBlocks.length > 0) {
-          console.log('\nSample Message:')
-          if (!msg.isEmpty) {
-            console.log('Content:', safeSlice(msg.content, 0, 200) + '...')
-          }
-
-          for (const [i, block] of msg.codeBlocks.entries()) {
-            if (block.hasContent) {
-              console.log(`\nCode Block ${i + 1}:`)
-              console.log('Content:', safeSlice(block.content, 0, 200) + '...')
-              if (block.language) {
-                console.log('Language:', block.language)
-              }
-
-              if (block.fileContext) {
-                console.log('File:', block.fileContext.path)
+              if (diff.newTextDiffWrtV0) {
+                for (const change of diff.newTextDiffWrtV0) {
+                  console.log(`\nLines ${change.original.startLineNumber}-${change.original.endLineNumberExclusive}:`)
+                  console.log('Modified code:')
+                  console.log('```')
+                  console.log(change.modified.join('\n'))
+                  console.log('```')
+                }
               }
             }
           }
 
-          break
+          console.log('\nCode blocks:')
+          if (targetMessage.codeBlocks?.length) {
+            for (const block of targetMessage.codeBlocks) {
+              console.log('\nBlock details:')
+              console.log('File:', block.uri?.path)
+              console.log('Language:', block.language || block.uri?.path?.split('.').pop() || 'unknown')
+
+              if (block.start !== undefined && block.end !== undefined) {
+                console.log('Lines:', block.start, '-', block.end)
+              }
+
+              if (block.content) {
+                console.log('Content:')
+                console.log('```')
+                console.log(block.content)
+                console.log('```')
+              } else {
+                console.log('No content available')
+              }
+            }
+          } else {
+            console.log('No code blocks found')
+          }
         }
+      } catch {
+        // Skip invalid entries
       }
     }
-
-    // Generate and print content statistics
-    const contentStats = extractContentStats(conversations)
-    printContentStats(contentStats)
-  } catch (error) {
-    console.error('Error inspecting database:', error)
   } finally {
     db?.close()
   }

@@ -6,6 +6,83 @@ import ora from 'ora'
 
 import type {ConversationData} from '../types.js'
 
+interface CodeBlock {
+  [key: string]: unknown
+  content?: string
+  end?: number
+  language?: string
+  start?: number
+  uri?: {
+    [key: string]: unknown
+    path: string
+  }
+}
+
+interface DiffChange {
+  original: {
+    startLineNumber: number
+    endLineNumberExclusive: number
+  }
+  modified: string[]
+}
+
+function processInlineDiffs(message: any): void {
+  // Skip if no checkpoint or diffs
+  if (!message.afterCheckpoint?.activeInlineDiffs?.length) return
+
+  // Process each code block
+  message.codeBlocks = message.codeBlocks || []
+
+  for (const diff of message.afterCheckpoint.activeInlineDiffs) {
+    const codeBlock = message.codeBlocks.find((block: any) => block.uri?.path === diff.uri?.path)
+
+    if (diff.newTextDiffWrtV0) {
+      const changes = diff.newTextDiffWrtV0.flatMap((change: DiffChange) => {
+        if (change.original && change.modified?.length) {
+          return [
+            `// Lines ${change.original.startLineNumber}-${change.original.endLineNumberExclusive}:`,
+            '// Original code removed',
+            '// New code:',
+            ...change.modified,
+            '', // Add spacing between changes
+          ]
+        }
+
+        return []
+      })
+
+      const content = changes.join('\n').trim()
+      const lastChange = diff.newTextDiffWrtV0.at(-1)
+      const firstChange = diff.newTextDiffWrtV0[0]
+
+      // Update existing block or create new one
+      if (codeBlock) {
+        codeBlock.content = content
+        codeBlock.language = codeBlock.uri.path.split('.').pop() || ''
+        // Preserve the line range if it exists
+        if (firstChange?.original) {
+          codeBlock.start = firstChange.original.startLineNumber
+          codeBlock.end = lastChange?.original.endLineNumberExclusive
+        }
+      } else {
+        const newBlock: CodeBlock = {
+          content,
+          language: diff.uri.path.split('.').pop() || '',
+          uri: diff.uri,
+        }
+
+        // Add line range if available
+        if (firstChange?.original) {
+          newBlock.start = firstChange.original.startLineNumber
+          newBlock.end = lastChange?.original.endLineNumberExclusive
+        }
+
+        message.codeBlocks.push(newBlock)
+      }
+    }
+  }
+}
+
 // Type guard for composer data
 interface ComposerData {
   composerId: string
@@ -149,9 +226,10 @@ function findWorkspaceInfo(composerId: string): {name?: string; path?: string} {
 
 /**
  * Extracts conversations from the global database and returns them.
+ * @param limit Optional limit on number of conversations to return
  * @returns A promise that resolves to an array of conversations
  */
-export async function extractGlobalConversations(): Promise<ConversationData[]> {
+export async function extractGlobalConversations(limit?: number): Promise<ConversationData[]> {
   const spinner = ora({
     color: 'cyan',
     spinner: 'dots',
@@ -185,7 +263,13 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
         setTimeout(r, 50)
       })
 
-      const rows = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as {
+      // If we only need one conversation, optimize the query
+      const query =
+        limit === 1
+          ? "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 1"
+          : "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
+
+      const rows = db.prepare(query).all() as {
         key: string
         value: string
       }[]
@@ -213,6 +297,13 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
                 if (!isComposerData(parsed)) {
                   console.error(`Invalid data structure in row ${row.key}`)
                   return null
+                }
+
+                // Process any inline diffs in the conversation
+                if (Array.isArray(parsed.conversation)) {
+                  for (const message of parsed.conversation) {
+                    processInlineDiffs(message)
+                  }
                 }
 
                 // Get workspace info for this conversation
@@ -249,8 +340,20 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
       )
 
       if (processedConversations.length > 0) {
+        // Sort by last message's timing instead of conversation creation time
+        const sorted = processedConversations.sort((a, b) => {
+          const aLastMessage = a.conversation.at(-1) as any
+          const bLastMessage = b.conversation.at(-1) as any
+
+          const aTime =
+            aLastMessage?.timingInfo?.clientEndTime || aLastMessage?.timingInfo?.clientSettleTime || a.createdAt
+          const bTime =
+            bLastMessage?.timingInfo?.clientEndTime || bLastMessage?.timingInfo?.clientSettleTime || b.createdAt
+
+          return bTime - aTime // Sort descending
+        })
         spinner.succeed(`Found ${processedConversations.length} conversations with content`)
-        return processedConversations.sort((a, b) => b.createdAt - a.createdAt)
+        return limit ? sorted.slice(0, limit) : sorted
       }
 
       spinner.info('No conversations with content found')
@@ -267,4 +370,13 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
     console.error('Error:', error)
     return []
   }
+}
+
+/**
+ * Gets only the latest conversation from the database
+ * @returns A promise that resolves to the latest conversation or null if none found
+ */
+export async function getLatestConversation(): Promise<ConversationData | null> {
+  const conversations = await extractGlobalConversations(1)
+  return conversations[0] || null
 }

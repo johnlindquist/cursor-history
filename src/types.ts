@@ -86,8 +86,10 @@ export interface Message {
   text?: string
   timestamp?: number
   timingInfo?: {
-    endTime: number
-    startTime: number
+    clientStartTime: number
+    clientRpcSendTime: number
+    clientSettleTime: number
+    clientEndTime: number
   }
   toolCalls?: Array<{
     name?: string
