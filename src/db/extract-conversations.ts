@@ -4,7 +4,32 @@ import {platform} from 'node:os'
 import {basename, join} from 'node:path'
 import ora from 'ora'
 
-import type {ConversationData, Message} from '../types.js'
+import type {ConversationData} from '../types.js'
+
+// Type guard for composer data
+interface ComposerData {
+  composerId: string
+  context?: unknown
+  conversation: unknown[]
+  createdAt: number
+  name?: string
+  richText?: boolean
+  text?: string
+  unifiedMode?: string
+}
+
+function isComposerData(data: unknown): data is ComposerData {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'composerId' in data &&
+    typeof (data as ComposerData).composerId === 'string' &&
+    'conversation' in data &&
+    Array.isArray((data as ComposerData).conversation) &&
+    'createdAt' in data &&
+    typeof (data as ComposerData).createdAt === 'number'
+  )
+}
 
 function getCursorDbPath(): string {
   const os = platform()
@@ -88,8 +113,16 @@ function findWorkspaceInfo(composerId: string): {name?: string; path?: string} {
         | {value: string}
 
       if (result) {
-        const data = JSON.parse(result.value)
-        if (data.allComposers?.some((c: any) => c.composerId === composerId)) {
+        const parsed = JSON.parse(result.value) as unknown
+        if (
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          'allComposers' in parsed &&
+          Array.isArray(parsed.allComposers) &&
+          parsed.allComposers.some(
+            (c: unknown) => typeof c === 'object' && c !== null && 'composerId' in c && c.composerId === composerId,
+          )
+        ) {
           // Found the workspace containing this conversation
           const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
           if (existsSync(workspaceJsonPath)) {
@@ -114,9 +147,6 @@ function findWorkspaceInfo(composerId: string): {name?: string; path?: string} {
   return {}
 }
 
-// Get the platform-specific database path
-const GLOBAL_DB_PATH = getCursorDbPath()
-
 /**
  * Extracts conversations from the global database and returns them.
  * @returns A promise that resolves to an array of conversations
@@ -132,7 +162,9 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
   try {
     dbPath = getCursorDbPath()
     spinner.text = 'Database path found, checking existence...'
-    await new Promise((r) => setTimeout(r, 50))
+    await new Promise<void>((r) => {
+      setTimeout(r, 50)
+    })
 
     if (!existsSync(dbPath)) {
       spinner.fail(`Global database not found at: ${dbPath}`)
@@ -140,14 +172,18 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
     }
 
     spinner.text = `Opening database connection: ${dbPath}`
-    await new Promise((r) => setTimeout(r, 50))
+    await new Promise<void>((r) => {
+      setTimeout(r, 50)
+    })
 
     let db: BetterSqlite3.Database | null = null
 
     try {
       db = new BetterSqlite3(dbPath, {readonly: true})
       spinner.text = 'Connected to database, querying conversations...'
-      await new Promise((r) => setTimeout(r, 50))
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
 
       const rows = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as {
         key: string
@@ -155,86 +191,66 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
       }[]
 
       spinner.text = `Found ${rows.length} potential conversations, beginning processing...`
-      await new Promise((r) => setTimeout(r, 50))
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
 
-      const conversations: ConversationData[] = []
-      let processed = 0
+      const processedConversations: ConversationData[] = []
+      const batchSize = 10
+      const batches = []
 
-      for (const row of rows) {
-        try {
-          const data = JSON.parse(row.value)
-          if (data.conversation?.length) {
-            processed++
-            if (processed % 10 === 0) {
-              spinner.text = `Processing conversations... (${processed}/${rows.length})`
-              // Reduced delay to make progress feel snappier
-              await new Promise((r) => setTimeout(r, 10))
-            }
-
-            const conversation = data.conversation.map((msg: Message) => {
-              if (msg.codeBlocks) {
-                msg.codeBlocks = msg.codeBlocks
-                  .map((block: unknown) => {
-                    // If block is a string, try to parse it
-                    if (typeof block === 'string') {
-                      try {
-                        const parsed = JSON.parse(block)
-                        // Ensure we have either content or code
-                        if (!parsed.content && !parsed.code) {
-                          return null
-                        }
-
-                        return parsed
-                      } catch {
-                        // If it fails to parse as JSON, it might be direct code content
-                        return {
-                          content: block,
-                          language: 'text',
-                        }
-                      }
-                    }
-
-                    // If block is already an object
-                    if (block && typeof block === 'object') {
-                      // Ensure we have either content or code property
-                      if (!('content' in block) && !('code' in block)) {
-                        return null
-                      }
-
-                      return block
-                    }
-
-                    return null
-                  })
-                  .filter(Boolean)
-              }
-
-              return msg
-            })
-
-            const workspaceInfo = findWorkspaceInfo(data.composerId)
-            conversations.push({
-              composerId: data.composerId,
-              context: data.context,
-              conversation,
-              createdAt: data.createdAt,
-              name: data.name || `Conversation ${data.composerId}`,
-              richText: data.richText,
-              text: data.text,
-              workspaceName: workspaceInfo.name,
-              workspacePath: workspaceInfo.path,
-            })
-          }
-        } catch (error) {
-          spinner.text = `Processing conversations... (${processed}/${rows.length})`
-          spinner.warn(`Failed to parse conversation data: ${error}`)
-          await new Promise((r) => setTimeout(r, 50))
-        }
+      for (let i = 0; i < rows.length; i += batchSize) {
+        batches.push(rows.slice(i, i + batchSize))
       }
 
-      if (conversations.length > 0) {
-        spinner.succeed(`Found ${conversations.length} conversations with content`)
-        return conversations.sort((a, b) => b.createdAt - a.createdAt)
+      // Process all batches in parallel
+      await Promise.all(
+        batches.map(async (batch) => {
+          const batchResults = await Promise.all(
+            batch.map(async (row) => {
+              try {
+                const parsed = JSON.parse(row.value) as unknown
+                if (!isComposerData(parsed)) {
+                  console.error(`Invalid data structure in row ${row.key}`)
+                  return null
+                }
+
+                // Get workspace info for this conversation
+                const workspaceInfo = findWorkspaceInfo(parsed.composerId)
+
+                return {
+                  composerId: parsed.composerId,
+                  context: parsed.context,
+                  conversation: parsed.conversation,
+                  createdAt: parsed.createdAt,
+                  name: parsed.name,
+                  richText: parsed.richText,
+                  text: parsed.text,
+                  unifiedMode: parsed.unifiedMode,
+                  workspaceName: workspaceInfo.name,
+                  workspacePath: workspaceInfo.path,
+                } as ConversationData
+              } catch (error) {
+                console.error(`Error processing row ${row.key}:`, error)
+                return null
+              }
+            }),
+          )
+
+          const validResults = batchResults.filter(
+            (result): result is ConversationData =>
+              result !== null &&
+              typeof result.composerId === 'string' &&
+              Array.isArray(result.conversation) &&
+              typeof result.createdAt === 'number',
+          )
+          processedConversations.push(...validResults)
+        }),
+      )
+
+      if (processedConversations.length > 0) {
+        spinner.succeed(`Found ${processedConversations.length} conversations with content`)
+        return processedConversations.sort((a, b) => b.createdAt - a.createdAt)
       }
 
       spinner.info('No conversations with content found')

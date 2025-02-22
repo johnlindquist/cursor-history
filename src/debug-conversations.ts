@@ -3,8 +3,6 @@ import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import {platform} from 'node:os'
 import {basename, join} from 'node:path'
 
-import type {CodeBlockAnalysis, ConversationAnalysis, MessageAnalysisResult} from './types.js'
-
 interface ConversationInfo {
   createdAt: number
   id: string
@@ -12,6 +10,33 @@ interface ConversationInfo {
   name: string
   workspaceName: string
   workspacePath: string
+}
+
+interface ComposerData {
+  allComposers: Array<{
+    composerId: string
+    createdAt: number
+    name?: string
+    unifiedMode?: string
+  }>
+}
+
+function isComposerData(data: unknown): data is ComposerData {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'allComposers' in data &&
+    Array.isArray((data as ComposerData).allComposers) &&
+    (data as ComposerData).allComposers.every(
+      (composer) =>
+        typeof composer === 'object' &&
+        composer !== null &&
+        'composerId' in composer &&
+        typeof composer.composerId === 'string' &&
+        'createdAt' in composer &&
+        typeof composer.createdAt === 'number',
+    )
+  )
 }
 
 function getWorkspaceStoragePath(): string {
@@ -122,16 +147,19 @@ function extractConversations(workspaceId: string): ConversationInfo[] {
 
     if (!composerData) return []
 
-    const data = JSON.parse(composerData.value)
-    if (!data.allComposers) return []
+    const parsed = JSON.parse(composerData.value) as unknown
+    if (!isComposerData(parsed)) {
+      console.error(`Invalid composer data structure in workspace ${workspaceId}`)
+      return []
+    }
 
-    for (const composer of data.allComposers) {
+    for (const composer of parsed.allComposers) {
       if (composer.name) {
         // Only include named conversations
         conversations.push({
           createdAt: composer.createdAt,
           id: composer.composerId,
-          mode: composer.unifiedMode,
+          mode: composer.unifiedMode || 'unknown',
           name: composer.name,
           workspaceName: workspaceInfo.name,
           workspacePath: workspaceInfo.path,

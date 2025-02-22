@@ -140,7 +140,7 @@ export function formatMessage(message: Message): null | string {
 
         output += '\n'
 
-        output += content?.trim() ? content.trim() : '// Content not available';
+        output += content?.trim() ? content.trim() : '// Content not available'
 
         output += '\n```\n\n'
       } else if (content) {
@@ -207,11 +207,13 @@ function slugify(text: string): string {
  * Generate a descriptive filename for a conversation
  */
 export function generateConversationFilename(data: ConversationData): string {
-  const date = new Date(data.createdAt).toISOString().split('T')[0]
+  const date = new Date(data.createdAt)
+  const dateStr = date.toISOString().split('T')[0]
+  const timeStr = `${date.getHours().toString().padStart(2, '0')}${date.getMinutes().toString().padStart(2, '0')}`
   const workspace = data.workspaceName || 'unknown-workspace'
   const title = data.name || `Conversation ${data.composerId}`
 
-  return `${slugify(workspace)}-${date}-${slugify(title)}-${data.composerId}.md`
+  return `${slugify(workspace)}-${dateStr}-${timeStr}-${slugify(title)}-${data.composerId}.md`
 }
 
 /**

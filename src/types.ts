@@ -1,7 +1,11 @@
 export interface CodeBlock {
-  code?: string
+  code: string
   codeBlockIdx?: number
-  language?: string
+  content?: string
+  end?: number
+  isGenerating?: boolean
+  language: string
+  start?: number
   uri?: {
     path: string
   }
@@ -32,7 +36,7 @@ export interface Selection {
 }
 
 export interface Message {
-  attachments?: any[]
+  attachments?: unknown[]
   bubbleId?: string
   cachedConversationSummary?: {
     summary: string
@@ -65,7 +69,7 @@ export interface Message {
   }>
   content: string
   metadata?: {
-    [key: string]: any
+    [key: string]: unknown
     cursorContextEndLine?: number
     cursorContextFiles?: string[]
     cursorContextFileType?: string
@@ -87,11 +91,11 @@ export interface Message {
   }
   toolCalls?: Array<{
     name?: string
-    parameters?: Record<string, any>
-    result?: any
+    parameters?: Record<string, unknown>
+    result?: unknown
     type: string
   }>
-  tools?: any[]
+  tools?: unknown[]
   type?: number | string
 }
 
@@ -120,6 +124,10 @@ export interface ConversationData {
 }
 
 export interface MessageAnalysisResult {
+  blocks?: Array<{
+    analysis: CodeBlockAnalysis
+    block: Partial<CodeBlock>
+  }>
   codeBlocks: CodeBlockAnalysis[]
   content: string
   contentLength: number
@@ -140,12 +148,12 @@ export interface MessageAnalysisResult {
     hasSelectedCode: boolean
     hasSelectedFile: boolean
   }
-  recoveredContent?: {
-    fromAttachments?: string
-    fromContextLines?: string
-    fromSelectedCode?: string
-  }
   role: string
+  stats?: {
+    avgBlockLength: number
+    totalBlocks: number
+    totalLength: number
+  }
   timestamp: number
 }
 

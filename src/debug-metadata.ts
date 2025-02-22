@@ -1,225 +1,24 @@
 import Database from 'better-sqlite3'
-import {existsSync, readdirSync, readFileSync} from 'node:fs'
+import {existsSync} from 'node:fs'
 import {platform} from 'node:os'
-import {basename, join} from 'node:path'
+import {join} from 'node:path'
 
 import type {CodeBlockAnalysis, ConversationAnalysis, Message, MessageAnalysisResult} from './types.js'
 
-interface ConversationMetadata {
-  createdAt: number
-  hasEmptyMessages: boolean
-  id: string
-  messages: Message[]
-  missingCodeBlocks: boolean
-  missingMetadata: boolean
-  mode: string
-  name: string
-  stats: {
-    emptyMessages: number
-    messagesWithAttachments: number
-    messagesWithCode: number
-    messagesWithTools: number
-    totalMessages: number
-  }
-  workspaceName: string
-  workspacePath: string
-}
-
 interface CodeBlock {
-  [key: string]: any
   code: string
+  codeBlockIdx?: number
+  content?: string
   end?: number
   file?: string
+  isGenerating?: boolean
   language?: string
   start?: number
-}
-
-interface UriObject {
-  $mid: number
-  external: string
-  fsPath: string
-  path: string
-  scheme: string
-}
-
-function getWorkspaceStoragePath(): string {
-  const os = platform()
-  const home = process.env.HOME || process.env.USERPROFILE || ''
-
-  switch (os) {
-    case 'darwin': {
-      return join(home, 'Library/Application Support/Cursor/User/workspaceStorage')
-    }
-
-    case 'linux': {
-      return join(home, '.config/Cursor/User/workspaceStorage')
-    }
-
-    case 'win32': {
-      return join(process.env.APPDATA || join(home, 'AppData/Roaming'), 'Cursor/User/workspaceStorage')
-    }
-
-    default: {
-      throw new Error(`Unsupported platform: ${os}`)
-    }
-  }
-}
-
-function decodeWorkspacePath(uri: string | UriObject): string {
-  try {
-    if (typeof uri === 'string') {
-      return uri.replace(/^file:\/\//, '')
-    }
-
-    return uri.fsPath
-  } catch (error) {
-    console.error('Failed to decode workspace path:', error)
-    return typeof uri === 'string' ? uri : uri.fsPath
-  }
-}
-
-function getWorkspaceInfo(workspaceId: string): null | {name: string; path: string} {
-  const workspacePath = join(getWorkspaceStoragePath(), workspaceId)
-  const workspaceJsonPath = join(workspacePath, 'workspace.json')
-
-  try {
-    const content = readFileSync(workspaceJsonPath, 'utf8')
-    const data = JSON.parse(content)
-    if (data && typeof data === 'object' && 'folder' in data) {
-      const decodedPath = decodeWorkspacePath(data.folder as string)
-      return {
-        name: basename(decodedPath),
-        path: decodedPath,
-      }
-    }
-  } catch (error) {
-    console.error(`Error reading workspace.json for ${workspaceId}:`, error)
-  }
-
-  return null
-}
-
-function findRecentConversations(limit = 5): Array<{composerId: string; workspaceId: string}> {
-  const conversations: Array<{composerId: string; createdAt: number; workspaceId: string}> = []
-
-  const workspaceIds = readdirSync(getWorkspaceStoragePath()).filter(
-    (id) => !id.startsWith('.') && existsSync(join(getWorkspaceStoragePath(), id, 'state.vscdb')),
-  )
-
-  for (const workspaceId of workspaceIds) {
-    const dbPath = join(getWorkspaceStoragePath(), workspaceId, 'state.vscdb')
-    let db: Database.Database | null = null
-
-    try {
-      db = new Database(dbPath, {fileMustExist: true, readonly: true})
-      const rows = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as {
-        key: string
-        value: string
-      }[]
-
-      for (const row of rows) {
-        try {
-          const data = JSON.parse(row.value)
-          if (data.conversation?.length > 0) {
-            conversations.push({
-              composerId: data.composerId,
-              createdAt: data.createdAt,
-              workspaceId,
-            })
-          }
-        } catch (error) {
-          console.error(`Error parsing conversation data in workspace ${workspaceId}:`, error)
-        }
-      }
-    } catch (error) {
-      console.error(`Error reading workspace ${workspaceId}:`, error)
-    } finally {
-      db?.close()
-    }
-  }
-
-  return conversations
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, limit)
-    .map(({composerId, workspaceId}) => ({composerId, workspaceId}))
-}
-
-function analyzeConversation(workspaceId: string, composerId: string): ConversationMetadata | null {
-  const dbPath = join(getWorkspaceStoragePath(), workspaceId, 'state.vscdb')
-  const workspaceInfo = getWorkspaceInfo(workspaceId)
-
-  if (!workspaceInfo) return null
-
-  let db: Database.Database | null = null
-  try {
-    db = new Database(dbPath, {fileMustExist: true, readonly: true})
-
-    // Get composer data from cursorDiskKV
-    const composerData = db
-      .prepare('SELECT value FROM cursorDiskKV WHERE key = ?')
-      .get(`composerData:${composerId}`) as undefined | {value: string}
-
-    if (!composerData) return null
-
-    const data = JSON.parse(composerData.value)
-    if (!data.conversation) return null
-
-    const stats = {
-      emptyMessages: 0,
-      messagesWithAttachments: 0,
-      messagesWithCode: 0,
-      messagesWithTools: 0,
-      totalMessages: 0,
-    }
-
-    let hasEmptyMessages = false
-    let missingCodeBlocks = false
-    let missingMetadata = false
-
-    // Analyze each message
-    const messages = data.conversation.map((msg: Message) => {
-      const analysis = analyzeMessage(msg)
-      stats.totalMessages++
-
-      if (analysis.isEmpty) {
-        hasEmptyMessages = true
-        stats.emptyMessages++
-      }
-
-      if (analysis.hasCode) stats.messagesWithCode++
-      if (analysis.hasTools) stats.messagesWithTools++
-      if (analysis.hasAttachments) stats.messagesWithAttachments++
-
-      // Check for potential missing data
-      if (msg.role === 'assistant' && msg.content.includes('```') && !analysis.hasCode) {
-        missingCodeBlocks = true
-      }
-
-      if (!msg.metadata) {
-        missingMetadata = true
-      }
-
-      return msg
-    })
-
-    return {
-      createdAt: data.createdAt,
-      hasEmptyMessages,
-      id: composerId,
-      messages,
-      missingCodeBlocks,
-      missingMetadata,
-      mode: data.unifiedMode,
-      name: data.name || 'Unnamed',
-      stats,
-      workspaceName: workspaceInfo.name,
-      workspacePath: workspaceInfo.path,
-    }
-  } catch (error) {
-    console.error(`Error analyzing conversation in workspace ${workspaceId}:`, error)
-    return null
-  } finally {
-    db?.close()
+  uri?: {
+    external?: string
+    fsPath?: string
+    path: string
+    scheme?: string
   }
 }
 
@@ -285,7 +84,7 @@ function determineContentType(content: string | undefined, language: string | un
     // JSX/TSX patterns
     /<[A-Z][A-Za-z]+[^>]*>/,
     // Common code symbols
-    /[{}\[\]()=>;]/,
+    /[{}[\]()=>;]/,
     // Import/export statements
     /\b(import|export)\b.*?['"][^'"]+['"]/,
     // Decorators
@@ -330,7 +129,7 @@ function determineContentType(content: string | undefined, language: string | un
   // Additional code indicators
   if (content.includes('```')) score += 3
   if (content.includes('`')) score += 1
-  if (/[{}\[\]();]/.test(content)) score += 2
+  if (/[{}[\]();]/.test(content)) score += 2
 
   // Make the decision
   if (score >= 3) return 'code'
@@ -338,10 +137,73 @@ function determineContentType(content: string | undefined, language: string | un
   return 'unknown'
 }
 
-function analyzeCodeBlock(block: any): CodeBlockAnalysis {
+function analyzeMessage(message: Message): MessageAnalysisResult {
+  const codeBlocks: CodeBlockAnalysis[] = []
+  const blocks: Array<{analysis: CodeBlockAnalysis; block: Partial<CodeBlock>}> = []
+
+  if (message.codeBlocks) {
+    for (const block of message.codeBlocks) {
+      const analysis = analyzeCodeBlock(block)
+      codeBlocks.push(analysis)
+      blocks.push({analysis, block})
+    }
+  }
+
+  let totalLength = 0
+  let blockCount = 0
+
+  for (const block of blocks) {
+    if (block.block.content) {
+      const {length} = block.block.content
+      totalLength += length
+      blockCount++
+    }
+  }
+
+  const avgLength = blockCount > 0 ? totalLength / blockCount : 0
+
+  return {
+    blocks,
+    codeBlocks,
+    content: message.content || '',
+    contentLength: message.content?.length || 0,
+    hasAttachments: Array.isArray(message.attachments) && message.attachments.length > 0,
+    hasCode: codeBlocks.length > 0,
+    hasMetadata: Boolean(message.metadata),
+    hasTools: Array.isArray(message.tools) && message.tools.length > 0,
+    isEmpty: !message.content?.trim(),
+    metadataDetails: message.metadata
+      ? {
+          additionalKeys: Object.keys(message.metadata).filter((key) => !key.startsWith('cursorContext')),
+          hasContextFiles: Boolean(message.metadata.cursorContextFiles),
+          hasContextLines: Boolean(message.metadata.cursorContextLines),
+          hasFileType: Boolean(message.metadata.cursorContextFileType),
+          hasGitInfo: Boolean(message.metadata.cursorContextGitBranch || message.metadata.cursorContextGitRepo),
+          hasLanguage: Boolean(message.metadata.cursorContextLanguage),
+          hasLineRange: Boolean(
+            message.metadata.cursorContextStartLine !== undefined &&
+              message.metadata.cursorContextEndLine !== undefined,
+          ),
+          hasProjectInfo: Boolean(message.metadata.cursorContextProjectRoot),
+          hasSelectedCode: Boolean(message.metadata.cursorContextSelectedCode),
+          hasSelectedFile: Boolean(message.metadata.cursorContextSelectedFile),
+        }
+      : undefined,
+    role: message.role || 'unknown',
+    stats: {
+      avgBlockLength: avgLength,
+      totalBlocks: blockCount,
+      totalLength,
+    },
+    timestamp: message.timestamp || 0,
+  }
+}
+
+function analyzeCodeBlock(block: Partial<CodeBlock> | string): CodeBlockAnalysis {
+  let parsedBlock: Partial<CodeBlock>
   if (typeof block === 'string') {
     try {
-      block = JSON.parse(block)
+      parsedBlock = JSON.parse(block)
     } catch {
       return {
         content: undefined,
@@ -362,25 +224,23 @@ function analyzeCodeBlock(block: any): CodeBlockAnalysis {
         type: 'unknown',
       }
     }
+  } else {
+    parsedBlock = block
   }
 
-  // Extract all possible content fields
-  const content = block?.content || block?.code || ''
-  const language = block?.languageId || block?.language || 'unknown'
-
-  // Analyze content structure
+  const content = parsedBlock.content || parsedBlock.code || ''
+  const language = parsedBlock.language || 'unknown'
   const type = determineContentType(content, language)
 
   let fileContext
-  if (block.uri) {
+  if (parsedBlock.uri) {
     fileContext = {
-      lineEnd: typeof block.end === 'number' ? block.end : undefined,
-      lineStart: typeof block.start === 'number' ? block.start : undefined,
-      path: decodeWorkspacePath(block.uri),
+      lineEnd: typeof parsedBlock.end === 'number' ? parsedBlock.end : undefined,
+      lineStart: typeof parsedBlock.start === 'number' ? parsedBlock.start : undefined,
+      path: typeof parsedBlock.uri === 'string' ? parsedBlock.uri : parsedBlock.uri.path,
     }
   }
 
-  // Enhanced content analysis
   const contentAnalysis = {
     hasClasses: /\bclass\b/.test(content),
     hasFunctions: /\b(function|=>)\b/.test(content),
@@ -391,99 +251,15 @@ function analyzeCodeBlock(block: any): CodeBlockAnalysis {
     lineCount: content ? content.split('\n').length : 0,
   }
 
-  // Log detailed analysis for debugging
-  if (content) {
-    console.log('\nCode Block Analysis:')
-    console.log('Content Length:', content.length)
-    console.log('Language:', language)
-    console.log('Type:', type)
-    console.log('Content Analysis:', contentAnalysis)
-    console.log('Content Preview:', content.slice(0, 100))
-    if (fileContext) {
-      console.log('File Context:', fileContext)
-    }
-  }
-
   return {
     content: content || undefined,
     contentAnalysis,
     contentLength: content?.length || 0,
     fileContext,
     hasContent: Boolean(content),
-    isGenerating: Boolean(block?.isGenerating),
+    isGenerating: Boolean(parsedBlock.isGenerating),
     language: language || undefined,
     type,
-  }
-}
-
-function analyzeMessage(message: Message): MessageAnalysisResult {
-  const isEmpty = !message.content || !message.content.trim()
-  const hasCode = Array.isArray(message.codeBlocks) && message.codeBlocks.length > 0
-  const hasTools = Array.isArray(message.tools) && message.tools.length > 0
-  const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0
-  const hasMetadata = Boolean(message.metadata)
-
-  const codeBlocks = message?.codeBlocks || []
-  const codeBlockAnalyses = codeBlocks.map(analyzeCodeBlock)
-
-  let metadataDetails
-  let recoveredContent
-
-  if (hasMetadata && message.metadata) {
-    const md = message.metadata
-    const allKeys = Object.keys(md)
-
-    metadataDetails = {
-      additionalKeys: allKeys.filter((k) => !k.startsWith('cursorContext')),
-      hasContextFiles: Array.isArray(md.cursorContextFiles) && md.cursorContextFiles.length > 0,
-      hasContextLines: Array.isArray(md.cursorContextLines) && md.cursorContextLines.length > 0,
-      hasFileType: Boolean(md.cursorContextFileType),
-      hasGitInfo: Boolean(md.cursorContextGitBranch || md.cursorContextGitRepo),
-      hasLanguage: Boolean(md.cursorContextLanguage),
-      hasLineRange: typeof md.cursorContextStartLine === 'number' && typeof md.cursorContextEndLine === 'number',
-      hasProjectInfo: Boolean(md.cursorContextProjectRoot),
-      hasSelectedCode: Boolean(md.cursorContextSelectedCode),
-      hasSelectedFile: Boolean(md.cursorContextSelectedFile),
-    }
-
-    recoveredContent = {
-      fromAttachments: undefined,
-      fromContextLines: undefined,
-      fromSelectedCode: undefined,
-    } as {
-      fromAttachments?: string
-      fromContextLines?: string
-      fromSelectedCode?: string
-    }
-
-    if (metadataDetails.hasContextLines && md.cursorContextLines) {
-      recoveredContent.fromContextLines = md.cursorContextLines.join('\n')
-    }
-
-    if (metadataDetails.hasSelectedCode) {
-      recoveredContent.fromSelectedCode = md.cursorContextSelectedCode
-    }
-
-    if (hasAttachments && message.attachments) {
-      recoveredContent.fromAttachments = message.attachments
-        .map((a) => (typeof a === 'string' ? a : JSON.stringify(a, null, 2)))
-        .join('\n')
-    }
-  }
-
-  return {
-    codeBlocks: codeBlockAnalyses,
-    content: message?.content || '',
-    contentLength: (message?.content || '').length,
-    hasAttachments,
-    hasCode,
-    hasMetadata,
-    hasTools,
-    isEmpty,
-    metadataDetails,
-    recoveredContent,
-    role: message?.role || 'unknown',
-    timestamp: message?.timestamp || 0,
   }
 }
 
@@ -520,8 +296,16 @@ function extractContentStats(conversations: ConversationAnalysis[]): ContentStat
       hasMarkdown: 0,
     },
     byLanguage: {},
-    byType: {code: 0, text: 0, unknown: 0},
-    contentLengths: {avg: 0, max: 0, min: Infinity},
+    byType: {
+      code: 0,
+      text: 0,
+      unknown: 0,
+    },
+    contentLengths: {
+      avg: 0,
+      max: 0,
+      min: Infinity,
+    },
     totalBlocks: 0,
     withContent: 0,
   }
@@ -529,41 +313,44 @@ function extractContentStats(conversations: ConversationAnalysis[]): ContentStat
   let totalLength = 0
   let blockCount = 0
 
-  for (const conv of conversations) {
-    for (const msg of conv.messages) {
-      for (const block of msg.codeBlocks) {
-        blockCount++
-        if (block.hasContent) {
-          stats.withContent++
-          const length = block.contentLength || 0
-          totalLength += length
-          stats.contentLengths.min = Math.min(stats.contentLengths.min, length)
-          stats.contentLengths.max = Math.max(stats.contentLengths.max, length)
-        }
+  for (const conversation of conversations) {
+    for (const message of conversation.messages) {
+      if (message.codeBlocks) {
+        stats.totalBlocks += message.codeBlocks.length
+        for (const block of message.codeBlocks) {
+          if (block.content) {
+            stats.withContent++
+            const {length} = block.content
+            stats.contentLengths.min = Math.min(stats.contentLengths.min, length)
+            stats.contentLengths.max = Math.max(stats.contentLengths.max, length)
+            totalLength += length
+            blockCount++
+          }
 
-        if (block.type === 'code' || block.type === 'text' || block.type === 'unknown') {
-          stats.byType[block.type]++
-        }
+          if (block.type === 'code' || block.type === 'text' || block.type === 'unknown') {
+            stats.byType[block.type]++
+          }
 
-        if (block.language) {
-          stats.byLanguage[block.language] = (stats.byLanguage[block.language] || 0) + 1
-        }
+          if (block.language) {
+            stats.byLanguage[block.language] = (stats.byLanguage[block.language] || 0) + 1
+          }
 
-        if (block.contentAnalysis) {
-          if (block.contentAnalysis.hasImports) stats.byFeatures.hasImports++
-          if (block.contentAnalysis.hasFunctions) stats.byFeatures.hasFunctions++
-          if (block.contentAnalysis.hasClasses) stats.byFeatures.hasClasses++
-          if (block.contentAnalysis.hasJSX) stats.byFeatures.hasJSX++
-          if (block.contentAnalysis.hasMarkdown) stats.byFeatures.hasMarkdown++
+          if (block.contentAnalysis) {
+            if (block.contentAnalysis.hasImports) stats.byFeatures.hasImports++
+            if (block.contentAnalysis.hasFunctions) stats.byFeatures.hasFunctions++
+            if (block.contentAnalysis.hasClasses) stats.byFeatures.hasClasses++
+            if (block.contentAnalysis.hasJSX) stats.byFeatures.hasJSX++
+            if (block.contentAnalysis.hasMarkdown) stats.byFeatures.hasMarkdown++
+          }
         }
       }
     }
   }
 
-  stats.totalBlocks = blockCount
-  stats.contentLengths.avg = blockCount > 0 ? totalLength / blockCount : 0
+  if (blockCount > 0) {
+    stats.contentLengths.avg = totalLength / blockCount
+  }
 
-  // Handle edge case where no blocks have content
   if (stats.contentLengths.min === Infinity) {
     stats.contentLengths.min = 0
   }
@@ -571,33 +358,38 @@ function extractContentStats(conversations: ConversationAnalysis[]): ContentStat
   return stats
 }
 
-function printContentStats(stats: ContentStats) {
-  console.log('\nDetailed Content Analysis:')
-  console.log('Total Blocks:', stats.totalBlocks)
-  console.log('Blocks with Content:', stats.withContent)
+function printContentStats(stats: ContentStats): void {
+  console.log('\nContent Statistics:')
+  console.log('------------------')
 
   console.log('\nBy Type:')
   for (const [type, count] of Object.entries(stats.byType)) {
-    const percentage = ((count / stats.totalBlocks) * 100).toFixed(1)
-    console.log(`- ${type}: ${count} (${percentage}%)`)
+    console.log(`  ${type}: ${count}`)
   }
 
   console.log('\nBy Language:')
-  for (const [lang, count] of Object.entries(stats.byLanguage).sort(([, a], [, b]) => b - a)) {
-    const percentage = ((count / stats.totalBlocks) * 100).toFixed(1)
-    console.log(`- ${lang}: ${count} (${percentage}%)`)
+  for (const [lang, count] of Object.entries(stats.byLanguage)) {
+    console.log(`  ${lang}: ${count}`)
   }
 
-  console.log('\nContent Features:')
+  console.log('\nBy Features:')
   for (const [feature, count] of Object.entries(stats.byFeatures)) {
-    const percentage = ((count / stats.totalBlocks) * 100).toFixed(1)
-    console.log(`- ${feature}: ${count} (${percentage}%)`)
+    console.log(`  ${feature}: ${count}`)
   }
 
   console.log('\nContent Lengths:')
-  console.log('- Min:', stats.contentLengths.min)
-  console.log('- Max:', stats.contentLengths.max)
-  console.log('- Average:', Math.round(stats.contentLengths.avg))
+  console.log(`  Min: ${stats.contentLengths.min}`)
+  console.log(`  Max: ${stats.contentLengths.max}`)
+  console.log(`  Avg: ${stats.contentLengths.avg.toFixed(2)}`)
+
+  console.log('\nTotals:')
+  console.log(`  Total Blocks: ${stats.totalBlocks}`)
+  console.log(`  With Content: ${stats.withContent}`)
+}
+
+function safeSlice(content: string | undefined, start: number, end: number): string {
+  if (!content) return ''
+  return content.slice(start, end)
 }
 
 async function main() {
@@ -626,125 +418,74 @@ async function main() {
     console.log('\nFound composer data keys:', items.length)
 
     // Parse all conversations and analyze their structure
-    const conversations = items
-      .map((item): ConversationAnalysis | null => {
-        try {
-          const data = JSON.parse(item.value)
-          const messages = Array.isArray(data.conversation) ? data.conversation : []
+    const conversations: ConversationAnalysis[] = []
+    for (const item of items) {
+      try {
+        const data = JSON.parse(item.value)
+        const messages = Array.isArray(data.conversation) ? data.conversation : []
+        const messageAnalyses: MessageAnalysisResult[] = []
 
-          const messageAnalysis = messages.map((msg: Message): MessageAnalysisResult => {
-            const codeBlocks = Array.isArray(msg?.codeBlocks) ? msg.codeBlocks : []
-            const codeBlockAnalyses = codeBlocks.map(analyzeCodeBlock)
-
-            return {
-              codeBlocks: codeBlockAnalyses,
-              content: msg?.content || '',
-              contentLength: (msg?.content || '').length,
-              hasAttachments: Array.isArray(msg?.attachments) && msg.attachments.length > 0,
-              hasCode: codeBlocks.length > 0,
-              hasMetadata: Boolean(msg?.metadata),
-              hasTools: Array.isArray(msg?.tools) && msg.tools.length > 0,
-              isEmpty: !msg?.content?.trim(),
-              metadataDetails: msg?.metadata
-                ? {
-                    additionalKeys: Object.keys(msg.metadata).filter((k) => !k.startsWith('cursorContext')),
-                    hasContextFiles:
-                      Array.isArray(msg.metadata.cursorContextFiles) && msg.metadata.cursorContextFiles.length > 0,
-                    hasContextLines:
-                      Array.isArray(msg.metadata.cursorContextLines) && msg.metadata.cursorContextLines.length > 0,
-                    hasFileType: Boolean(msg.metadata.cursorContextFileType),
-                    hasGitInfo: Boolean(msg.metadata.cursorContextGitBranch || msg.metadata.cursorContextGitRepo),
-                    hasLanguage: Boolean(msg.metadata.cursorContextLanguage),
-                    hasLineRange:
-                      typeof msg.metadata.cursorContextStartLine === 'number' &&
-                      typeof msg.metadata.cursorContextEndLine === 'number',
-                    hasProjectInfo: Boolean(msg.metadata.cursorContextProjectRoot),
-                    hasSelectedCode: Boolean(msg.metadata.cursorContextSelectedCode),
-                    hasSelectedFile: Boolean(msg.metadata.cursorContextSelectedFile),
-                  }
-                : undefined,
-              recoveredContent: msg?.metadata
-                ? {
-                    fromAttachments: msg.attachments
-                      ?.map((a) => (typeof a === 'string' ? a : JSON.stringify(a, null, 2)))
-                      .join('\n'),
-                    fromContextLines: msg.metadata.cursorContextLines?.join('\n'),
-                    fromSelectedCode: msg.metadata.cursorContextSelectedCode,
-                  }
-                : undefined,
-              role: msg?.role || 'unknown',
-              timestamp: msg?.timestamp || 0,
-            }
-          })
-
-          return {
-            contentAnalysis: {
-              contentTypes: {
-                code: messageAnalysis.reduce(
-                  (sum: number, m: MessageAnalysisResult) =>
-                    sum + m.codeBlocks.filter((b: CodeBlockAnalysis) => b.type === 'code').length,
-                  0,
-                ),
-                text: messageAnalysis.reduce(
-                  (sum: number, m: MessageAnalysisResult) =>
-                    sum + m.codeBlocks.filter((b: CodeBlockAnalysis) => b.type === 'text').length,
-                  0,
-                ),
-                unknown: messageAnalysis.reduce(
-                  (sum: number, m: MessageAnalysisResult) =>
-                    sum + m.codeBlocks.filter((b: CodeBlockAnalysis) => b.type === 'unknown').length,
-                  0,
-                ),
-              },
-              fileReferences: messageAnalysis.reduce(
-                (acc: Record<string, {count: number; hasLineRanges: boolean}>, m: MessageAnalysisResult) => {
-                  for (const b of m.codeBlocks) {
-                    if (b.fileContext?.path) {
-                      const {path} = b.fileContext
-                      if (!acc[path]) {
-                        acc[path] = {count: 0, hasLineRanges: false}
-                      }
-
-                      acc[path].count++
-                      acc[path].hasLineRanges =
-                        acc[path].hasLineRanges ||
-                        (b.fileContext.lineStart !== undefined && b.fileContext.lineEnd !== undefined)
-                    }
-                  }
-
-                  return acc
-                },
-                {},
-              ),
-              generatingBlocks: messageAnalysis.reduce(
-                (sum: number, m: MessageAnalysisResult) =>
-                  sum + m.codeBlocks.filter((b: CodeBlockAnalysis) => b.isGenerating).length,
-                0,
-              ),
-              languages: [...new Set(conversations.flatMap((c) => c.contentAnalysis.languages))].filter(
-                (l): l is string => typeof l === 'string',
-              ),
-              messagesWithContent: messageAnalysis.filter((m: MessageAnalysisResult) => !m.isEmpty).length,
-              totalCodeBlocks: messageAnalysis.reduce(
-                (sum: number, m: MessageAnalysisResult) => sum + m.codeBlocks.length,
-                0,
-              ),
-            },
-            createdAt: data.createdAt || 0,
-            id: data.composerId || '',
-            key: item.key,
-            messageCount: messages.length,
-            messages: messageAnalysis,
-            mode: data.unifiedMode || 'unknown',
-            name: data.name || 'Unnamed',
-          }
-        } catch (error) {
-          console.error(`Error parsing conversation data for key ${item.key}:`, error)
-          return null
+        for (const msg of messages) {
+          const analysis = analyzeMessage(msg)
+          messageAnalyses.push(analysis)
         }
-      })
-      .filter((c): c is ConversationAnalysis => c !== null)
-      .sort((a, b) => b.createdAt - a.createdAt)
+
+        const contentTypes = {
+          code: 0,
+          text: 0,
+          unknown: 0,
+        }
+
+        const fileReferences: Record<string, {count: number; hasLineRanges: boolean}> = {}
+        let generatingBlocks = 0
+        const languages = new Set<string>()
+
+        for (const msg of messageAnalyses) {
+          for (const block of msg.codeBlocks) {
+            if (block.type === 'code') contentTypes.code++
+            if (block.type === 'text') contentTypes.text++
+            if (block.type === 'unknown') contentTypes.unknown++
+
+            if (block.isGenerating) generatingBlocks++
+            if (block.language) languages.add(block.language)
+
+            if (block.fileContext?.path) {
+              const {path} = block.fileContext
+              if (!fileReferences[path]) {
+                fileReferences[path] = {count: 0, hasLineRanges: false}
+              }
+
+              fileReferences[path].count++
+              fileReferences[path].hasLineRanges =
+                fileReferences[path].hasLineRanges ||
+                (block.fileContext.lineStart !== undefined && block.fileContext.lineEnd !== undefined)
+            }
+          }
+        }
+
+        conversations.push({
+          contentAnalysis: {
+            contentTypes,
+            fileReferences,
+            generatingBlocks,
+            languages: [...languages],
+            messagesWithContent: messageAnalyses.filter((m) => !m.isEmpty).length,
+            totalCodeBlocks: messageAnalyses.reduce((sum, m) => sum + m.codeBlocks.length, 0),
+          },
+          createdAt: data.createdAt || 0,
+          id: data.composerId || '',
+          key: item.key,
+          messageCount: messages.length,
+          messages: messageAnalyses,
+          mode: data.unifiedMode || 'unknown',
+          name: data.name || 'Unnamed',
+        })
+      } catch (error) {
+        console.error(`Error parsing conversation data for key ${item.key}:`, error)
+      }
+    }
+
+    conversations.sort((a, b) => b.createdAt - a.createdAt)
 
     // Print overall statistics
     console.log('\nOverall Statistics:')
@@ -785,13 +526,13 @@ async function main() {
         if (!msg.isEmpty || msg.codeBlocks.length > 0) {
           console.log('\nSample Message:')
           if (!msg.isEmpty) {
-            console.log('Message Content:', msg.content.slice(0, 200) + '...')
+            console.log('Content:', safeSlice(msg.content, 0, 200) + '...')
           }
 
           for (const [i, block] of msg.codeBlocks.entries()) {
             if (block.hasContent) {
               console.log(`\nCode Block ${i + 1}:`)
-              console.log('Content:', block.content?.slice(0, 200) + '...')
+              console.log('Content:', safeSlice(block.content, 0, 200) + '...')
               if (block.language) {
                 console.log('Language:', block.language)
               }
