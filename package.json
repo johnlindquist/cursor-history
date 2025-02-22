@@ -78,7 +78,8 @@
   "types": "dist/index.d.ts",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3"
+      "better-sqlite3",
+      "sqlite3"
     ]
   }
 }
