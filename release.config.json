@@ -6,8 +6,12 @@
     "@semantic-release/npm",
     ["@semantic-release/github", {
       "assets": [
-        {"path": "dist/**/*.js", "label": "JavaScript files"},
-        {"path": "dist/**/*.d.ts", "label": "TypeScript Declaration files"}
+        {"path": "dist/index.js", "label": "Main JavaScript file", "name": "index.js"},
+        {"path": "dist/index.d.ts", "label": "Main TypeScript Declaration", "name": "index.d.ts"},
+        {"path": "dist/commands/**/*.js", "label": "Command JavaScript files"},
+        {"path": "dist/commands/**/*.d.ts", "label": "Command TypeScript Declarations"},
+        {"path": "dist/utils/**/*.js", "label": "Utility JavaScript files"},
+        {"path": "dist/utils/**/*.d.ts", "label": "Utility TypeScript Declarations"}
       ],
       "successComment": false,
       "failComment": false,
