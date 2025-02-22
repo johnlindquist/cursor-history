@@ -208,6 +208,15 @@ export function formatConversation(conversation: ConversationData): string {
 }
 
 /**
+ * Checks if a conversation has any messages from the Assistant
+ */
+export function hasAssistantMessages(conversation: ConversationData): boolean {
+  return conversation.conversation.some(
+    (message) => message.role === 'Assistant' || message.type === '2' || message.type === 2,
+  )
+}
+
+/**
  * Generates a filename for a conversation based on its metadata.
  */
 export function generateConversationFilename(conversation: ConversationData): string {
