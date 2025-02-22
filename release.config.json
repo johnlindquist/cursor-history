@@ -6,12 +6,14 @@
     "@semantic-release/npm",
     ["@semantic-release/github", {
       "assets": [
-        {"path": "dist/index.js", "label": "Main JavaScript file", "name": "index.js"},
-        {"path": "dist/index.d.ts", "label": "Main TypeScript Declaration", "name": "index.d.ts"},
-        {"path": "dist/commands/**/*.js", "label": "Command JavaScript files"},
-        {"path": "dist/commands/**/*.d.ts", "label": "Command TypeScript Declarations"},
-        {"path": "dist/utils/**/*.js", "label": "Utility JavaScript files"},
-        {"path": "dist/utils/**/*.d.ts", "label": "Utility TypeScript Declarations"}
+        {"path": "dist/index.js", "label": "Main JavaScript file", "name": "dist-index.js"},
+        {"path": "dist/index.d.ts", "label": "Main TypeScript Declaration", "name": "dist-index.d.ts"},
+        {"path": "dist/commands/extract/index.js", "label": "Extract Command JavaScript", "name": "dist-commands-extract.js"},
+        {"path": "dist/commands/extract/index.d.ts", "label": "Extract Command TypeScript", "name": "dist-commands-extract.d.ts"},
+        {"path": "dist/utils/config.js", "label": "Config Utility JavaScript", "name": "dist-utils-config.js"},
+        {"path": "dist/utils/config.d.ts", "label": "Config Utility TypeScript", "name": "dist-utils-config.d.ts"},
+        {"path": "dist/utils/formatting.js", "label": "Formatting Utility JavaScript", "name": "dist-utils-formatting.js"},
+        {"path": "dist/utils/formatting.d.ts", "label": "Formatting Utility TypeScript", "name": "dist-utils-formatting.d.ts"}
       ],
       "successComment": false,
       "failComment": false,
