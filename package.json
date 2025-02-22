@@ -1,7 +1,7 @@
 {
   "name": "@johnlindquist/cursor-history",
   "description": "A new CLI generated with oclif",
-  "version": "0.0.13",
+  "version": "0.0.12",
   "author": "John Lindquist",
   "bin": {
     "chi": "./bin/run.js"
@@ -85,6 +85,13 @@
     "peerDependencyRules": {
       "allowedVersions": {
         "@types/node": ">=16"
+      }
+    },
+    "overrides": {
+      "better-sqlite3": {
+        "prebuild-install": {
+          "runtime": "napi"
+        }
       }
     }
   }
