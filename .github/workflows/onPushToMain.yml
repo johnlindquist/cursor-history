@@ -15,8 +15,8 @@ jobs:
         with:
           version: 8
       - run: |
-          git config --global user.name "${{ secrets.GH_USERNAME }}"
-          git config --global user.email "${{ secrets.GH_EMAIL }}"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
       - run: pnpm install
       - run: pnpm run build
       - name: Check if version already exists
