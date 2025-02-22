@@ -6,8 +6,8 @@
     "@semantic-release/npm",
     ["@semantic-release/github", {
       "assets": [
-        {"path": "dist/**/*.js", "label": "JavaScript files", "name": "${nextRelease.gitTag}-${file.path}"},
-        {"path": "dist/**/*.d.ts", "label": "TypeScript Declaration files", "name": "${nextRelease.gitTag}-${file.path}"}
+        {"path": "dist/**/*.js", "label": "JavaScript files"},
+        {"path": "dist/**/*.d.ts", "label": "TypeScript Declaration files"}
       ],
       "successComment": false,
       "failComment": false,
