@@ -1,7 +1,7 @@
-import Database from 'better-sqlite3'
 import {existsSync} from 'node:fs'
 import {platform} from 'node:os'
 import {join} from 'node:path'
+import {Database} from './db/sqlite-wrapper.js'
 
 import type {CodeBlockAnalysis, ConversationAnalysis, Message, MessageAnalysisResult} from './types.js'
 
@@ -401,7 +401,7 @@ async function main() {
     return
   }
 
-  let db: Database.Database | null = null
+  let db: Database | null = null
   try {
     db = new Database(globalDbPath, {readonly: true})
 

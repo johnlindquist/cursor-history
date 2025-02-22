@@ -1,8 +1,8 @@
-import BetterSqlite3 from 'better-sqlite3'
 import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import {platform} from 'node:os'
 import {basename, join} from 'node:path'
 import ora from 'ora'
+import {Database} from './sqlite-wrapper.js'
 
 import type {ConversationData} from '../types.js'
 
@@ -93,7 +93,7 @@ function decodeWorkspacePath(uri: string): string {
   }
 }
 
-function findWorkspaceInfo(composerId: string): {name?: string; path?: string} {
+async function findWorkspaceInfo(composerId: string): Promise<{name?: string; path?: string}> {
   const workspaceStoragePath = getWorkspaceStoragePath()
   if (!existsSync(workspaceStoragePath)) return {}
 
@@ -107,10 +107,8 @@ function findWorkspaceInfo(composerId: string): {name?: string; path?: string} {
     if (!existsSync(dbPath)) continue
 
     try {
-      const db = new BetterSqlite3(dbPath, {readonly: true})
-      const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
-        | undefined
-        | {value: string}
+      const db = new Database(dbPath, {readonly: true})
+      const result = await db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get()
 
       if (result) {
         const parsed = JSON.parse(result.value) as unknown
@@ -129,6 +127,7 @@ function findWorkspaceInfo(composerId: string): {name?: string; path?: string} {
             const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
             if (workspaceData.folder) {
               const path = decodeWorkspacePath(workspaceData.folder)
+              await db.close()
               return {
                 name: basename(path),
                 path,
@@ -138,7 +137,7 @@ function findWorkspaceInfo(composerId: string): {name?: string; path?: string} {
         }
       }
 
-      db.close()
+      await db.close()
     } catch (error) {
       console.error(`Error checking workspace ${workspace.name}:`, error)
     }
@@ -176,19 +175,16 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
       setTimeout(r, 50)
     })
 
-    let db: BetterSqlite3.Database | null = null
+    let db: Database | null = null
 
     try {
-      db = new BetterSqlite3(dbPath, {readonly: true})
+      db = new Database(dbPath, {readonly: true})
       spinner.text = 'Connected to database, querying conversations...'
       await new Promise<void>((r) => {
         setTimeout(r, 50)
       })
 
-      const rows = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as {
-        key: string
-        value: string
-      }[]
+      const rows = await db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all()
 
       spinner.text = `Found ${rows.length} potential conversations, beginning processing...`
       await new Promise<void>((r) => {
@@ -216,7 +212,7 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
                 }
 
                 // Get workspace info for this conversation
-                const workspaceInfo = findWorkspaceInfo(parsed.composerId)
+                const workspaceInfo = await findWorkspaceInfo(parsed.composerId)
 
                 return {
                   composerId: parsed.composerId,
@@ -248,23 +244,14 @@ export async function extractGlobalConversations(): Promise<ConversationData[]> 
         }),
       )
 
-      if (processedConversations.length > 0) {
-        spinner.succeed(`Found ${processedConversations.length} conversations with content`)
-        return processedConversations.sort((a, b) => b.createdAt - a.createdAt)
-      }
-
-      spinner.info('No conversations with content found')
-      return []
-    } catch (error) {
-      spinner.fail('Error processing database')
-      console.error('Error:', error)
-      return []
+      spinner.succeed(`Successfully processed ${processedConversations.length} conversations`)
+      return processedConversations
     } finally {
-      db?.close()
+      if (db) await db.close()
     }
   } catch (error) {
-    spinner.fail('Failed to determine database path')
-    console.error('Error:', error)
+    spinner.fail('Error processing database')
+    console.error(error)
     return []
   }
 }

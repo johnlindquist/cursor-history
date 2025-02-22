@@ -1,7 +1,7 @@
 {
   "name": "@johnlindquist/cursor-history",
   "description": "A new CLI generated with oclif",
-  "version": "0.0.5",
+  "version": "0.0.4",
   "author": "John Lindquist",
   "bin": {
     "chi": "./bin/run.js"
@@ -12,11 +12,10 @@
     "@oclif/core": "^4",
     "@oclif/plugin-help": "^6",
     "@oclif/plugin-plugins": "^5",
-    "better-sqlite3": "^11.8.1",
+    "@vscode/sqlite3": "^5.1.7",
     "clipboardy": "^4.0.0",
     "conf": "^13.1.0",
-    "ora": "^8.2.0",
-    "sqlite3": "^5.1.7"
+    "ora": "^8.2.0"
   },
   "devDependencies": {
     "@eslint/compat": "^1",
@@ -73,15 +72,10 @@
     "posttest": "pnpm run lint",
     "prepack": "oclif manifest && oclif readme",
     "test": "mocha --forbid-only \"test/**/*.test.ts\"",
-    "version": "oclif readme && git add README.md",
-    "postinstall": "node-gyp rebuild"
+    "version": "oclif readme && git add README.md"
   },
   "types": "dist/index.d.ts",
   "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "sqlite3"
-    ]
-  },
-  "gypfile": true
+    "onlyBuiltDependencies": []
+  }
 }
