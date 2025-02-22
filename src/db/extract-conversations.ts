@@ -1,7 +1,8 @@
 import BetterSqlite3 from 'better-sqlite3'
-import {existsSync, readFileSync, readdirSync} from 'node:fs'
+import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import {platform} from 'node:os'
 import {basename, join} from 'node:path'
+import ora from 'ora'
 
 import type {ConversationData, Message} from '../types.js'
 
@@ -118,87 +119,136 @@ const GLOBAL_DB_PATH = getCursorDbPath()
 
 /**
  * Extracts conversations from the global database and returns them.
- * @returns An array of conversations
+ * @returns A promise that resolves to an array of conversations
  */
-export function extractGlobalConversations(): ConversationData[] {
+export async function extractGlobalConversations(): Promise<ConversationData[]> {
+  const spinner = ora({
+    color: 'cyan',
+    spinner: 'dots',
+    text: 'Determining database path...',
+  }).start()
+
   let dbPath: string
   try {
     dbPath = getCursorDbPath()
-  } catch (error) {
-    console.error('Failed to determine database path:', error)
-    return []
-  }
+    spinner.text = 'Database path found, checking existence...'
+    await new Promise((r) => setTimeout(r, 50))
 
-  if (!existsSync(dbPath)) {
-    console.error(`Global database not found at: ${dbPath}`)
-    return []
-  }
+    if (!existsSync(dbPath)) {
+      spinner.fail(`Global database not found at: ${dbPath}`)
+      return []
+    }
 
-  console.log(`Processing global database: ${dbPath}`)
-  let db: BetterSqlite3.Database | null = null
+    spinner.text = `Opening database connection: ${dbPath}`
+    await new Promise((r) => setTimeout(r, 50))
 
-  try {
-    db = new BetterSqlite3(dbPath, {readonly: true})
-    const rows = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as {
-      key: string
-      value: string
-    }[]
+    let db: BetterSqlite3.Database | null = null
 
-    console.log(`Found ${rows.length} potential conversations`)
-    const conversations: ConversationData[] = []
+    try {
+      db = new BetterSqlite3(dbPath, {readonly: true})
+      spinner.text = 'Connected to database, querying conversations...'
+      await new Promise((r) => setTimeout(r, 50))
 
-    for (const row of rows) {
-      try {
-        const data = JSON.parse(row.value)
-        if (data.conversation?.length) {
-          const conversation = data.conversation.map((msg: Message) => {
-            if (msg.codeBlocks) {
-              msg.codeBlocks = msg.codeBlocks
-                .map((block: unknown) => {
-                  if (typeof block === 'string') {
-                    try {
-                      return JSON.parse(block)
-                    } catch (error) {
-                      console.log(`Failed to parse code block: ${error}`)
-                      return null
-                    }
-                  }
+      const rows = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as {
+        key: string
+        value: string
+      }[]
 
-                  return block
-                })
-                .filter(Boolean)
+      spinner.text = `Found ${rows.length} potential conversations, beginning processing...`
+      await new Promise((r) => setTimeout(r, 50))
+
+      const conversations: ConversationData[] = []
+      let processed = 0
+
+      for (const row of rows) {
+        try {
+          const data = JSON.parse(row.value)
+          if (data.conversation?.length) {
+            processed++
+            if (processed % 10 === 0) {
+              spinner.text = `Processing conversations... (${processed}/${rows.length})`
+              // Reduced delay to make progress feel snappier
+              await new Promise((r) => setTimeout(r, 10))
             }
 
-            return msg
-          })
-          const workspaceInfo = findWorkspaceInfo(data.composerId)
-          conversations.push({
-            composerId: data.composerId,
-            context: data.context,
-            conversation,
-            createdAt: data.createdAt,
-            richText: data.richText,
-            text: data.text,
-            workspaceName: workspaceInfo.name,
-            workspacePath: workspaceInfo.path,
-          })
+            const conversation = data.conversation.map((msg: Message) => {
+              if (msg.codeBlocks) {
+                msg.codeBlocks = msg.codeBlocks
+                  .map((block: unknown) => {
+                    // If block is a string, try to parse it
+                    if (typeof block === 'string') {
+                      try {
+                        const parsed = JSON.parse(block)
+                        // Ensure we have either content or code
+                        if (!parsed.content && !parsed.code) {
+                          return null
+                        }
+
+                        return parsed
+                      } catch {
+                        // If it fails to parse as JSON, it might be direct code content
+                        return {
+                          content: block,
+                          language: 'text',
+                        }
+                      }
+                    }
+
+                    // If block is already an object
+                    if (block && typeof block === 'object') {
+                      // Ensure we have either content or code property
+                      if (!('content' in block) && !('code' in block)) {
+                        return null
+                      }
+
+                      return block
+                    }
+
+                    return null
+                  })
+                  .filter(Boolean)
+              }
+
+              return msg
+            })
+
+            const workspaceInfo = findWorkspaceInfo(data.composerId)
+            conversations.push({
+              composerId: data.composerId,
+              context: data.context,
+              conversation,
+              createdAt: data.createdAt,
+              name: data.name || `Conversation ${data.composerId}`,
+              richText: data.richText,
+              text: data.text,
+              workspaceName: workspaceInfo.name,
+              workspacePath: workspaceInfo.path,
+            })
+          }
+        } catch (error) {
+          spinner.text = `Processing conversations... (${processed}/${rows.length})`
+          spinner.warn(`Failed to parse conversation data: ${error}`)
+          await new Promise((r) => setTimeout(r, 50))
         }
-      } catch (error) {
-        console.log(`Failed to parse conversation data: ${error}`)
       }
-    }
 
-    if (conversations.length > 0) {
-      console.log(`Found ${conversations.length} conversations with content`)
-      return conversations.sort((a, b) => b.createdAt - a.createdAt)
-    }
+      if (conversations.length > 0) {
+        spinner.succeed(`Found ${conversations.length} conversations with content`)
+        return conversations.sort((a, b) => b.createdAt - a.createdAt)
+      }
 
-    console.log('No conversations with content found')
-    return []
+      spinner.info('No conversations with content found')
+      return []
+    } catch (error) {
+      spinner.fail('Error processing database')
+      console.error('Error:', error)
+      return []
+    } finally {
+      db?.close()
+    }
   } catch (error) {
-    console.error('Error processing database:', error)
+    spinner.fail('Failed to determine database path')
+    console.error('Error:', error)
     return []
-  } finally {
-    db?.close()
   }
 }

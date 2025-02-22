@@ -8,7 +8,7 @@ import {join} from 'node:path'
 import type {ConversationData} from '../../types.js'
 
 import {extractGlobalConversations} from '../../db/extract-conversations.js'
-import {formatConversation} from '../../utils/formatting.js'
+import {formatConversation, generateConversationFilename} from '../../utils/formatting.js'
 
 export default class Search extends Command {
   static aliases = [''] // This makes it the default command
@@ -18,7 +18,7 @@ export default class Search extends Command {
 Interactively search and view conversations from Cursor's global storage database
 `,
   ]
-private conversations: ConversationData[] = []
+  private conversations: ConversationData[] = []
 
   async run(): Promise<void> {
     this.log('Loading conversations...')
@@ -39,7 +39,7 @@ private conversations: ConversationData[] = []
 
     // Write to temp file
     const tempDir = tmpdir()
-    const filename = `cursor-conversation-${selectedConversation.composerId}.md`
+    const filename = generateConversationFilename(selectedConversation)
     const outputPath = join(tempDir, filename)
     writeFileSync(outputPath, markdown)
 
@@ -58,7 +58,7 @@ private conversations: ConversationData[] = []
 
   private async searchConversations(
     term: string | undefined,
-  ): Promise<Array<{description: string; name: string; value: ConversationData;}>> {
+  ): Promise<Array<{description: string; name: string; value: ConversationData}>> {
     if (!term) return []
 
     const termLower = term.toLowerCase()

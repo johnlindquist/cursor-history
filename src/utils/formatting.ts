@@ -33,6 +33,7 @@ export function formatMessage(message: Message): null | string {
   const hasSummary =
     typeof message.cachedConversationSummary?.summary === 'string' &&
     message.cachedConversationSummary.summary.trim().length > 0
+  const hasMetadata = Boolean(message.metadata)
 
   const role =
     message.role ||
@@ -45,7 +46,48 @@ export function formatMessage(message: Message): null | string {
   let output = `### ${role}\n\n`
 
   if (hasText) {
-    output += `${message.text.trim()}\n\n`
+    output += `${message.text?.trim()}\n\n`
+  }
+
+  if (hasMetadata && message.metadata) {
+    output += '**Context:**\n'
+    if (message.metadata.cursorContextFiles?.length) {
+      output += '- Files:\n'
+      for (const file of message.metadata.cursorContextFiles) {
+        output += `  - \`${file}\`\n`
+      }
+
+      output += '\n'
+    }
+
+    if (message.metadata.cursorContextLines?.length) {
+      output += '- Context Lines:\n```\n'
+      output += message.metadata.cursorContextLines.join('\n')
+      output += '\n```\n\n'
+    }
+
+    if (message.metadata.cursorContextSelectedCode) {
+      output += '- Selected Code:\n```'
+      if (message.metadata.cursorContextLanguage) {
+        output += message.metadata.cursorContextLanguage
+      }
+
+      output += '\n'
+      output += message.metadata.cursorContextSelectedCode
+      output += '\n```\n\n'
+    }
+
+    if (message.metadata.cursorContextSelectedFile) {
+      output += `- Selected File: \`${message.metadata.cursorContextSelectedFile}\`\n`
+      if (
+        typeof message.metadata.cursorContextStartLine === 'number' &&
+        typeof message.metadata.cursorContextEndLine === 'number'
+      ) {
+        output += `- Line Range: ${message.metadata.cursorContextStartLine}-${message.metadata.cursorContextEndLine}\n`
+      }
+
+      output += '\n'
+    }
   }
 
   if (message.checkpoint?.files) {
@@ -72,6 +114,7 @@ export function formatMessage(message: Message): null | string {
   if (hasToolCalls) metadata.push(`Tool Calls: ${message.toolCalls!.length}`)
   if (hasFileChanges) metadata.push('Has File Changes')
   if (hasSummary) metadata.push('Has Summary')
+  if (hasMetadata) metadata.push('Has Context')
 
   if (metadata.length > 0) {
     output += '_Metadata:_ ' + metadata.join(' | ') + '\n\n'
@@ -79,15 +122,35 @@ export function formatMessage(message: Message): null | string {
 
   if (hasCodeBlocks) {
     for (const block of message.codeBlocks!) {
-      if (block?.uri?.path && block?.codeBlockIdx !== undefined) {
+      const content = block?.content || block?.code
+      const language = block?.language || block?.languageId || ''
+
+      if (block?.uri?.path) {
         const filename = block.uri.path.split('/').pop() || 'unknown'
-        output += `\`\`\`\nFile Reference: ${filename}\nBlock Index: ${block.codeBlockIdx}\n\`\`\`\n\n`
-      } else if (block && typeof block.code === 'string') {
-        const language = typeof block.language === 'string' ? block.language.toLowerCase() : ''
-        const code = block.code.trim()
-        if (code) {
-          output += `\`\`\`${language}\n${code}\n\`\`\`\n\n`
+
+        output += `\`\`\`${language.toLowerCase()}\n`
+        output += `// File: ${filename}\n`
+        if (block.start !== undefined && block.end !== undefined) {
+          output += `// Lines: ${block.start}-${block.end}\n`
         }
+
+        if (block.codeBlockIdx !== undefined) {
+          output += `// Block Index: ${block.codeBlockIdx}\n`
+        }
+
+        output += '\n'
+
+        output += content?.trim() ? content.trim() : '// Content not available';
+
+        output += '\n```\n\n'
+      } else if (content) {
+        output += `\`\`\`${language.toLowerCase()}\n`
+        output += content.trim()
+        output += '\n```\n\n'
+      }
+
+      if (block.isGenerating) {
+        output += '_Generating..._\n\n'
       }
     }
   }
@@ -130,10 +193,32 @@ export function formatMessage(message: Message): null | string {
 }
 
 /**
+ * Convert a string to a URL-friendly slug
+ */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, '-') // Replace non-alphanumeric chars with hyphens
+    .replaceAll(/^-+|-+$/g, '') // Remove leading/trailing hyphens
+    .slice(0, 100) // Limit length
+}
+
+/**
+ * Generate a descriptive filename for a conversation
+ */
+export function generateConversationFilename(data: ConversationData): string {
+  const date = new Date(data.createdAt).toISOString().split('T')[0]
+  const workspace = data.workspaceName || 'unknown-workspace'
+  const title = data.name || `Conversation ${data.composerId}`
+
+  return `${slugify(workspace)}-${date}-${slugify(title)}-${data.composerId}.md`
+}
+
+/**
  * Formats an entire conversation into a Markdown document.
  */
 export function formatConversation(data: ConversationData): string {
-  let output = `# Conversation ${data.composerId}\n\n`
+  let output = `# ${data.name || `Conversation ${data.composerId}`}\n\n`
 
   if (data.workspaceName) {
     output += `**Workspace:** ${data.workspaceName}\n`

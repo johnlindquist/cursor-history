@@ -3,8 +3,8 @@ import {writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {extractGlobalConversations} from '../../db/extract-conversations.js'
-import {createOutputDir} from '../../utils/file-system.js'
-import {formatConversation} from '../../utils/formatting.js'
+import {getConfigPath, getConversationsPath, getOutputDir} from '../../utils/config.js'
+import {formatConversation, generateConversationFilename} from '../../utils/formatting.js'
 
 export default class Extract extends Command {
   static description = 'Extract conversations from Cursor global storage'
@@ -16,32 +16,37 @@ Extracts all conversations from Cursor's global storage database and saves them 
 
   async run(): Promise<void> {
     this.log('Starting conversation extraction...')
-    const conversations = extractGlobalConversations()
+    const conversations = await extractGlobalConversations()
 
     if (conversations.length > 0) {
-      const outputDir = createOutputDir()
+      const outputDir = getOutputDir()
 
+      // Create individual conversation files
+      const indexEntries: string[] = []
       for (const conv of conversations) {
-        const filename = `${conv.composerId}.md`
+        const markdown = formatConversation(conv)
+        const filename = generateConversationFilename(conv)
         const outputPath = join(outputDir, filename)
-        writeFileSync(outputPath, formatConversation(conv))
-        this.log(`Wrote conversation to ${outputPath}`)
+        writeFileSync(outputPath, markdown)
+
+        const date = new Date(conv.createdAt).toLocaleString()
+        const preview = conv.text?.slice(0, 60) || 'No preview available'
+        indexEntries.push(`- [${date}](${filename})\n  ${preview}...\n`)
       }
 
-      // Create an index file
+      // Create index file
       const indexPath = join(outputDir, 'index.md')
-      const indexContent = conversations
-        .map((conv) => {
-          const date = new Date(conv.createdAt).toISOString()
-          const preview = conv.conversation[0]?.text?.slice(0, 100) || 'No preview available'
-          return `- [${date}](${conv.composerId}.md)\n  ${preview}...\n`
-        })
-        .join('\n')
+      const indexContent = `# Cursor Conversations\n\n${indexEntries.join('\n')}`
+      writeFileSync(indexPath, indexContent)
 
-      writeFileSync(indexPath, `# Conversations Index\n\n${indexContent}`)
-      this.log(`Wrote index to ${indexPath}`)
+      this.log(`\nExtraction Summary:`)
+      this.log(`- Conversations extracted: ${conversations.length}`)
+      this.log(`- Conversations directory: ${getConversationsPath()}`)
+      this.log(`- Latest output: ${outputDir}`)
+    } else {
+      this.log('No conversations found to extract.')
     }
 
-    this.log('Extraction complete!')
+    this.log('\nExtraction complete!')
   }
 }

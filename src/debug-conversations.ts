@@ -3,6 +3,8 @@ import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import {platform} from 'node:os'
 import {basename, join} from 'node:path'
 
+import type {CodeBlockAnalysis, ConversationAnalysis, MessageAnalysisResult} from './types.js'
+
 interface ConversationInfo {
   createdAt: number
   id: string
