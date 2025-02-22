@@ -16,12 +16,11 @@ jobs:
       - uses: pnpm/action-setup@v2
         with:
           version: 8
+      - run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
       - run: pnpm install
       - run: pnpm run build
-      - name: Configure Git
-        run: |
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
       - run: pnpm run prepack
       - uses: JS-DevTools/npm-publish@19c28f1ef146469e409470805ea4279d47c3d35c
         with:
