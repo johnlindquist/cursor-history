@@ -19,10 +19,9 @@ jobs:
       - run: |
           git config --global user.name "${{ secrets.GH_USERNAME }}"
           git config --global user.email "${{ secrets.GH_EMAIL }}"
-      - run: pnpm install
+      - run: pnpm install --no-frozen-lockfile
       - run: pnpm run build
-      - run: pnpm run prepack
+      - run: pnpm exec oclif readme
       - uses: JS-DevTools/npm-publish@19c28f1ef146469e409470805ea4279d47c3d35c
         with:
           token: ${{ secrets.NPM_TOKEN }}
-      - run: pnpm run postpack
