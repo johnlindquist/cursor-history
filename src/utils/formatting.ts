@@ -222,11 +222,16 @@ export function hasAssistantMessages(conversation: ConversationData): boolean {
 export function generateConversationFilename(conversation: ConversationData): string {
   const date = new Date(conversation.createdAt)
   const dateStr = date.toISOString().split('T')[0]
+  const workspace = conversation.workspaceName || 'unnamed-workspace'
   const name = conversation.name || 'unnamed'
+  const sanitizedWorkspace = workspace
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
   const sanitizedName = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
 
-  return `${dateStr}-${sanitizedName}.md`
+  return `${dateStr}-${sanitizedWorkspace}-${sanitizedName}.md`
 }
