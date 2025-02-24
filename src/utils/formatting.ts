@@ -54,11 +54,10 @@ export function formatMessage(message: Message): null | string {
       const duration = (clientEndTime - clientStartTime) / 1000 // Convert to seconds
 
       output += `⏱️ `
-      if (formattedStart === formattedEnd) {
-        output += `${formattedStart} (instant)\n\n`
-      } else {
-        output += `${duration.toFixed(1)}s • ${formattedStart} → ${formattedEnd}\n\n`
-      }
+      output +=
+        formattedStart === formattedEnd
+          ? `${formattedStart} (instant)\n\n`
+          : `${duration.toFixed(1)}s • ${formattedStart} → ${formattedEnd}\n\n`
     }
   }
 
@@ -227,12 +226,12 @@ export function generateConversationFilename(conversation: ConversationData): st
   const name = conversation.name || 'unnamed'
   const sanitizedWorkspace = workspace
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
+    .replaceAll(/[^a-z0-9]+/g, '-')
+    .replaceAll(/^-|-$/g, '')
   const sanitizedName = name
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
+    .replaceAll(/[^a-z0-9]+/g, '-')
+    .replaceAll(/^-|-$/g, '')
 
   return `${sanitizedWorkspace}-${dateStr}-${timeStr}-${sanitizedName}.md`
 }
