@@ -1,0 +1,52 @@
+---
+description: project-wide rules
+globs: 
+alwaysApply: true
+---
+
+# Cursor History (chi) CLI Tool
+
+## Project Overview
+This CLI tool extracts and manages conversation history from the Cursor AI editor. It allows users to:
+- Extract all conversations to markdown files
+- Search through conversations interactively
+- Export the latest conversation to a file and clipboard
+
+## Project Structure
+- `src/index.ts` - Main entry point and command handler
+- `src/db/extract-conversations.ts` - Core functionality for extracting conversations from the Cursor database
+- `src/utils/` - Helper utilities for formatting and configuration
+- `src/types.ts` - TypeScript type definitions for conversations and messages
+
+## Key Features
+- **Workspace-aware conversations**: The tool can filter conversations by workspace name
+- **Conversation extraction**: Exports conversations to markdown files with proper formatting
+- **Interactive search**: Allows searching through conversation history
+- **Clipboard integration**: Automatically copies exported conversations to clipboard
+
+## Database Structure
+- Uses SQLite databases located in platform-specific paths:
+  - macOS: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
+  - Linux: `~/.config/Cursor/User/globalStorage/state.vscdb`
+  - Windows: `%APPDATA%/Cursor/User/globalStorage/state.vscdb`
+- Workspace-specific data is stored in `workspaceStorage` subdirectories
+
+## Commands
+- `chi` (default) - Export the latest conversation (filtered by current directory name if matching)
+- `chi --extract` - Extract all conversations to markdown files
+- `chi --search` - Interactively search through conversations
+- `chi --version` - Show CLI version
+
+## Development Workflow
+- Build: `pnpm build`
+- Run default command: `pnpm default`
+- Run search: `pnpm search`
+- Run extract: `pnpm extract`
+- Lint with autofix: `pnpm lint`
+
+## Recent Changes
+- Added workspace filtering by current directory name
+- When running the default command, the tool now:
+  1. Gets the current directory name
+  2. Searches for conversations from that workspace
+  3. Falls back to global latest conversation if no matching workspace found

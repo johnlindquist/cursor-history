@@ -31,6 +31,7 @@ async function main() {
       console.log(`- Client Start: ${new Date(timing.clientStartTime).toLocaleString()} (${timing.clientStartTime})`)
       console.log(`- Client End: ${new Date(timing.clientEndTime).toLocaleString()} (${timing.clientEndTime})`)
     }
+
     console.log('\nLast Message Debug Info:')
     console.log(`Available Keys: ${JSON.stringify(Object.keys(lastMessage), null, 2)}`)
     console.log(`Has content property: ${Object.hasOwn(lastMessage, 'content')}`)

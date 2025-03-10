@@ -1,15 +1,15 @@
 import search from '@inquirer/search'
-import {Command, Flags} from '@oclif/core'
+import { Command, Flags } from '@oclif/core'
 import clipboardy from 'clipboardy'
-import {writeFileSync} from 'node:fs'
-import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import { writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
 
-import type {ConversationData} from './types.js'
+import type { ConversationData } from './types.js'
 
-import {extractGlobalConversations, getLatestConversation} from './db/extract-conversations.js'
-import {getConversationsPath, getOutputDir} from './utils/config.js'
-import {formatConversation, generateConversationFilename} from './utils/formatting.js'
+import { extractGlobalConversations, getLatestConversation, getLatestConversationForWorkspace } from './db/extract-conversations.js'
+import { getConversationsPath, getOutputDir } from './utils/config.js'
+import { formatConversation, generateConversationFilename } from './utils/formatting.js'
 
 export default class CursorHistory extends Command {
   static description = 'Manage and search Cursor conversation history'
@@ -26,7 +26,7 @@ Interactively search and view conversations`,
       description: 'Extract all conversations to markdown files',
       exclusive: ['search'],
     }),
-    help: Flags.help({char: 'h', description: 'Show CLI help'}),
+    help: Flags.help({ char: 'h', description: 'Show CLI help' }),
     search: Flags.boolean({
       char: 's',
       description: 'Interactively search and view conversations',
@@ -39,24 +39,8 @@ Interactively search and view conversations`,
   }
   private conversations: ConversationData[] = []
 
-  private async exportConversation(conversation: ConversationData): Promise<void> {
-    const markdown = formatConversation(conversation)
-
-    // Write to temp file
-    const tempDir = tmpdir()
-    const filename = generateConversationFilename(conversation)
-    const outputPath = join(tempDir, filename)
-    writeFileSync(outputPath, markdown)
-
-    // Copy to clipboard
-    await clipboardy.write(markdown)
-
-    this.log(`\nConversation exported to: ${outputPath}`)
-    this.log('Content has been copied to clipboard.')
-  }
-
   async run(): Promise<void> {
-    const {flags} = await this.parse(CursorHistory)
+    const { flags } = await this.parse(CursorHistory)
 
     if (flags.version) {
       this.log(this.config.version)
@@ -77,14 +61,46 @@ Interactively search and view conversations`,
         await this.searchConversations()
       }
     } else {
-      // Default behavior: get latest conversation
-      const latestConversation = await getLatestConversation()
-      if (!latestConversation) {
-        this.log('No conversations found.')
-        return
+      // Default behavior: get latest conversation for current workspace or global latest
+
+      // Get current directory name to use as workspace filter
+      const currentDirName = basename(process.cwd())
+      this.log(`Current directory: ${currentDirName}`)
+
+      // Try to find a conversation for the current workspace
+      const workspaceConversation = await getLatestConversationForWorkspace(currentDirName)
+
+      if (workspaceConversation) {
+        this.log(`Found conversation for workspace: ${currentDirName}`)
+        await this.exportConversation(workspaceConversation)
+      } else {
+        // Fall back to global latest conversation
+        this.log('No workspace-specific conversation found, using latest global conversation')
+        const latestConversation = await getLatestConversation()
+        if (!latestConversation) {
+          this.log('No conversations found.')
+          return
+        }
+
+        await this.exportConversation(latestConversation)
       }
-      await this.exportConversation(latestConversation)
     }
+  }
+
+  private async exportConversation(conversation: ConversationData): Promise<void> {
+    const markdown = formatConversation(conversation)
+
+    // Write to temp file
+    const tempDir = tmpdir()
+    const filename = generateConversationFilename(conversation)
+    const outputPath = join(tempDir, filename)
+    writeFileSync(outputPath, markdown)
+
+    // Copy to clipboard
+    await clipboardy.write(markdown)
+
+    this.log(`\nConversation exported to: ${outputPath}`)
+    this.log('Content has been copied to clipboard.')
   }
 
   private async extractConversations(): Promise<void> {
@@ -135,7 +151,7 @@ Interactively search and view conversations`,
 
   private async searchConversationSource(
     term: string | undefined,
-  ): Promise<Array<{description: string; name: string; value: ConversationData}>> {
+  ): Promise<Array<{ description: string; name: string; value: ConversationData }>> {
     if (!term) return []
 
     const termLower = term.toLowerCase()

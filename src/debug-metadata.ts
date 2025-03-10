@@ -18,11 +18,11 @@ interface CodeBlock {
 }
 
 interface DiffChange {
-  original: {
-    startLineNumber: number
-    endLineNumberExclusive: number
-  }
   modified: string[]
+  original: {
+    endLineNumberExclusive: number
+    startLineNumber: number
+  }
 }
 
 function getCursorDbPath(): string {

@@ -19,11 +19,11 @@ interface CodeBlock {
 }
 
 interface DiffChange {
-  original: {
-    startLineNumber: number
-    endLineNumberExclusive: number
-  }
   modified: string[]
+  original: {
+    endLineNumberExclusive: number
+    startLineNumber: number
+  }
 }
 
 function processInlineDiffs(message: any): void {
@@ -373,8 +373,104 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
 }
 
 /**
- * Gets only the latest conversation from the database that has content
- * @returns A promise that resolves to the latest conversation or null if none found
+ * Retrieves the latest conversation for a specific workspace.
+ * @param workspaceName The name of the workspace to filter by
+ * @returns A promise that resolves to the latest conversation for the workspace, or null if none found
+ */
+export async function getLatestConversationForWorkspace(workspaceName: string): Promise<ConversationData | null> {
+  const spinner = ora({
+    color: 'cyan',
+    spinner: 'dots',
+    text: `Finding latest conversation for workspace "${workspaceName}"...`,
+  }).start()
+
+  try {
+    const dbPath = getCursorDbPath()
+
+    if (!existsSync(dbPath)) {
+      spinner.fail(`Global database not found at: ${dbPath}`)
+      return null
+    }
+
+    const db = new BetterSqlite3(dbPath, { readonly: true })
+
+    try {
+      // Query for the 20 most recent conversations
+      const rows = db.prepare(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 20"
+      ).all() as { key: string; value: string }[]
+
+      if (rows.length === 0) {
+        spinner.info('No conversations found')
+        return null
+      }
+
+      spinner.text = `Found ${rows.length} recent conversations, searching for workspace "${workspaceName}"...`
+
+      // Process conversations one by one until we find a suitable one for the workspace
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(row.value) as unknown
+
+          if (!isComposerData(parsed)) {
+            continue
+          }
+
+          // Skip conversations without messages
+          if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
+            continue
+          }
+
+          // Process any inline diffs in the conversation
+          for (const message of parsed.conversation) {
+            processInlineDiffs(message)
+          }
+
+          // Get workspace info for this conversation
+          const workspaceInfo = findWorkspaceInfo(parsed.composerId)
+
+          // Skip if workspace name doesn't match
+          if (!workspaceInfo.name || workspaceInfo.name !== workspaceName) {
+            continue
+          }
+
+          const conversation: ConversationData = {
+            composerId: parsed.composerId,
+            context: parsed.context as ConversationData['context'],
+            conversation: parsed.conversation as ConversationData['conversation'],
+            createdAt: parsed.createdAt,
+            name: parsed.name,
+            richText: parsed.richText,
+            text: parsed.text,
+            unifiedMode: parsed.unifiedMode,
+            workspaceName: workspaceInfo.name,
+            workspacePath: workspaceInfo.path,
+          }
+
+          spinner.succeed(`Found conversation for workspace "${workspaceName}"`)
+          return conversation
+        } catch {
+          // Skip this conversation if there's an error processing it
+          continue
+        }
+      }
+
+      // If we get here, we didn't find any suitable conversations for the workspace
+      spinner.info(`No conversations found for workspace "${workspaceName}"`)
+      return null
+    } finally {
+      db.close()
+    }
+  } catch (error) {
+    spinner.fail('Error accessing database')
+    console.error('Error:', error)
+    return null
+  }
+}
+
+/**
+ * Retrieves the latest conversation with content.
+ * @returns A promise that resolves to the latest conversation, or null if none found
  */
 export async function getLatestConversation(): Promise<ConversationData | null> {
   const spinner = ora({
@@ -457,7 +553,7 @@ export async function getLatestConversation(): Promise<ConversationData | null> 
 
           spinner.succeed('Found conversation with content')
           return conversation
-        } catch (error) {
+        } catch {
           // Skip this conversation if there's an error processing it
           continue
         }
