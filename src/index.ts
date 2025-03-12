@@ -126,7 +126,10 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
     this.log(`Current directory: ${currentDirName}`)
 
     // Check if current directory matches a workspace
-    const matchingWorkspace = workspaces.find(ws => ws.name === currentDirName)
+    // Either the workspace name matches exactly (case-insensitive), or the currentDirName is contained in the workspace path (case-insensitive)
+    const matchingWorkspace = workspaces.find(ws => 
+      ws.name.toLowerCase() === currentDirName.toLowerCase() || ws.path.toLowerCase().includes(currentDirName.toLowerCase())
+    )
 
     let selectedWorkspace: { name: string; path: string; id: string } | undefined
 
@@ -159,7 +162,11 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
     this.log(`Selected workspace: ${selectedWorkspace.name}`)
 
     // Get conversations for the selected workspace
-    const workspaceConversations = await getConversationsForWorkspace(selectedWorkspace.name)
+    // If the current directory matches a workspace, use the current directory name
+    // Otherwise, use the selected workspace's name
+    const workspaceNameToUse = matchingWorkspace ? currentDirName : selectedWorkspace.name
+    this.log(`Using workspace name: ${workspaceNameToUse} for conversation lookup`)
+    const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse)
 
     if (workspaceConversations.length === 0) {
       this.log(`No conversations found for workspace: ${selectedWorkspace.name}`)

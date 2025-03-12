@@ -440,6 +440,78 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
     const db = new BetterSqlite3(dbPath, { readonly: true })
 
     try {
+      // First, build a mapping of composerIds to workspaces for the target workspace
+      spinner.text = `Building composerId mapping for workspace "${workspaceName}"...`
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
+
+      const composerIdsForWorkspace = new Set<string>()
+      const workspaceStoragePath = getWorkspaceStoragePath()
+
+      if (existsSync(workspaceStoragePath)) {
+        const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
+
+        for (const workspace of workspaces) {
+          if (!workspace.isDirectory()) continue
+
+          const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
+          if (!existsSync(workspaceJsonPath)) continue
+
+          try {
+            const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
+            if (workspaceData.folder) {
+              const path = decodeWorkspacePath(workspaceData.folder)
+              const name = basename(path)
+
+              // Check if this is the workspace we're looking for
+              // Either the basename matches exactly (case-insensitive), or the workspaceName is contained in the path (case-insensitive)
+              if (name.toLowerCase() !== workspaceName.toLowerCase() && !path.toLowerCase().includes(workspaceName.toLowerCase())) continue
+
+              const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
+              if (!existsSync(dbPath)) continue
+
+              const workspaceDb = new BetterSqlite3(dbPath, { readonly: true })
+              const result = workspaceDb.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
+                | undefined
+                | { value: string }
+
+              if (result) {
+                const parsed = JSON.parse(result.value) as unknown
+                if (
+                  typeof parsed === 'object' &&
+                  parsed !== null &&
+                  'allComposers' in parsed &&
+                  Array.isArray(parsed.allComposers)
+                ) {
+                  // Add all composerIds for this workspace to our set
+                  for (const composer of parsed.allComposers) {
+                    if (typeof composer === 'object' && composer !== null && 'composerId' in composer) {
+                      composerIdsForWorkspace.add(composer.composerId as string)
+                    }
+                  }
+                }
+              }
+
+              workspaceDb.close()
+            }
+          } catch (error) {
+            console.error(`Error processing workspace ${workspace.name}:`, error)
+          }
+        }
+      }
+
+      spinner.text = `Found ${composerIdsForWorkspace.size} composerIds for workspace "${workspaceName}"`
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
+
+      // If we didn't find any composerIds for this workspace, return empty result
+      if (composerIdsForWorkspace.size === 0) {
+        spinner.info(`No composerIds found for workspace "${workspaceName}"`)
+        return []
+      }
+
       spinner.text = 'Connected to database, querying conversations...'
       await new Promise<void>((r) => {
         setTimeout(r, 50)
@@ -462,7 +534,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
 
       const workspaceConversations: ConversationData[] = []
 
-      // Process conversations and filter for the specified workspace
+      // Process conversations and filter for the specified workspace using our composerId mapping
       let processedCount = 0;
       for (const row of rows) {
         try {
@@ -481,6 +553,11 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
             continue
           }
 
+          // Skip if this composerId is not in our target workspace
+          if (!composerIdsForWorkspace.has(parsed.composerId)) {
+            continue
+          }
+
           // Skip conversations without messages
           if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
             continue
@@ -492,11 +569,14 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
           }
 
           // Get workspace info for this conversation
-          const workspaceInfo = findWorkspaceInfo(parsed.composerId)
+          const workspaceInfo = { name: workspaceName, path: '' }
 
-          // Skip if workspace name doesn't match
-          if (!workspaceInfo.name || workspaceInfo.name !== workspaceName) {
-            continue
+          // Get the full path if needed
+          if (composerIdsForWorkspace.has(parsed.composerId)) {
+            const fullWorkspaceInfo = findWorkspaceInfo(parsed.composerId)
+            if (fullWorkspaceInfo.path) {
+              workspaceInfo.path = fullWorkspaceInfo.path
+            }
           }
 
           const conversation: ConversationData = {
@@ -562,14 +642,102 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
     const db = new BetterSqlite3(dbPath, { readonly: true })
 
     try {
+      // First, build a mapping of composerIds to workspaces for the target workspace
+      spinner.text = `Building composerId mapping for workspace "${workspaceName}"...`
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
+
+      const composerIdsForWorkspace = new Set<string>()
+      const workspaceStoragePath = getWorkspaceStoragePath()
+      console.log(`Workspace storage path: ${workspaceStoragePath}`)
+
+      if (existsSync(workspaceStoragePath)) {
+        const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
+        console.log(`Found ${workspaces.length} workspace directories`)
+
+        for (const workspace of workspaces) {
+          if (!workspace.isDirectory()) continue
+
+          const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
+          if (!existsSync(workspaceJsonPath)) continue
+
+          try {
+            const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
+            if (workspaceData.folder) {
+              const path = decodeWorkspacePath(workspaceData.folder)
+              const name = basename(path)
+              console.log(`Checking workspace: ${name} (${path})`)
+
+              // Check if this is the workspace we're looking for
+              // Either the basename matches exactly (case-insensitive), or the workspaceName is contained in the path (case-insensitive)
+              if (name.toLowerCase() !== workspaceName.toLowerCase() && !path.toLowerCase().includes(workspaceName.toLowerCase())) {
+                console.log(`Workspace ${name} does not match ${workspaceName}`)
+                continue
+              }
+              console.log(`Found matching workspace: ${name} (${path})`)
+
+              const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
+              if (!existsSync(dbPath)) {
+                console.log(`Database not found for workspace: ${name} (${path})`)
+                continue
+              }
+
+              const workspaceDb = new BetterSqlite3(dbPath, { readonly: true })
+              const result = workspaceDb.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
+                | undefined
+                | { value: string }
+
+              if (result) {
+                const parsed = JSON.parse(result.value) as unknown
+                if (
+                  typeof parsed === 'object' &&
+                  parsed !== null &&
+                  'allComposers' in parsed &&
+                  Array.isArray(parsed.allComposers)
+                ) {
+                  console.log(`Found ${parsed.allComposers.length} composers for workspace: ${name} (${path})`)
+                  // Add all composerIds for this workspace to our set
+                  for (const composer of parsed.allComposers) {
+                    if (typeof composer === 'object' && composer !== null && 'composerId' in composer) {
+                      composerIdsForWorkspace.add(composer.composerId as string)
+                      console.log(`Added composerId: ${composer.composerId} for workspace: ${name} (${path})`)
+                    }
+                  }
+                } else {
+                  console.log(`No allComposers found for workspace: ${name} (${path})`)
+                }
+              } else {
+                console.log(`No composer.composerData found for workspace: ${name} (${path})`)
+              }
+
+              workspaceDb.close()
+            }
+          } catch (error) {
+            console.error(`Error processing workspace ${workspace.name}:`, error)
+          }
+        }
+      }
+
+      spinner.text = `Found ${composerIdsForWorkspace.size} composerIds for workspace "${workspaceName}"`
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
+
+      // If we didn't find any composerIds for this workspace, return null
+      if (composerIdsForWorkspace.size === 0) {
+        spinner.info(`No composerIds found for workspace "${workspaceName}"`)
+        return null
+      }
+
       spinner.text = 'Connected to database, querying conversations...'
       await new Promise<void>((r) => {
         setTimeout(r, 50)
       })
 
-      // Query for the 20 most recent conversations
+      // Query for the 100 most recent conversations to increase chances of finding workspace-specific ones
       const rows = db.prepare(
-        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 20"
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 100"
       ).all() as { key: string; value: string }[]
 
       if (rows.length === 0) {
@@ -581,6 +749,9 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
       await new Promise<void>((r) => {
         setTimeout(r, 50)
       })
+
+      console.log(`Looking for conversations with composerIds for workspace "${workspaceName}"...`)
+      console.log(`We have ${composerIdsForWorkspace.size} composerIds to check against`)
 
       // Process conversations one by one until we find a suitable one for the workspace
       let processedCount = 0;
@@ -598,8 +769,19 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
           const parsed = JSON.parse(row.value) as unknown
 
           if (!isComposerData(parsed)) {
+            console.log(`Skipping conversation because it's not valid composer data: ${row.key}`)
             continue
           }
+
+          console.log(`Checking conversation with composerId: ${parsed.composerId}`)
+
+          // Skip if this composerId is not in our target workspace
+          if (!composerIdsForWorkspace.has(parsed.composerId)) {
+            console.log(`Skipping conversation because composerId ${parsed.composerId} is not in our target workspace`)
+            continue
+          }
+
+          console.log(`Found conversation with composerId ${parsed.composerId} for workspace "${workspaceName}"!`)
 
           // Skip conversations without messages
           if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
@@ -612,11 +794,14 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
           }
 
           // Get workspace info for this conversation
-          const workspaceInfo = findWorkspaceInfo(parsed.composerId)
+          const workspaceInfo = { name: workspaceName, path: '' }
 
-          // Skip if workspace name doesn't match
-          if (!workspaceInfo.name || workspaceInfo.name !== workspaceName) {
-            continue
+          // Get the full path if needed
+          if (composerIdsForWorkspace.has(parsed.composerId)) {
+            const fullWorkspaceInfo = findWorkspaceInfo(parsed.composerId)
+            if (fullWorkspaceInfo.path) {
+              workspaceInfo.path = fullWorkspaceInfo.path
+            }
           }
 
           const conversation: ConversationData = {
