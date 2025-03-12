@@ -170,6 +170,43 @@ function decodeWorkspacePath(uri: string): string {
   }
 }
 
+/**
+ * Lists all available workspaces.
+ * @returns An array of workspace objects with name and path properties
+ */
+export function listWorkspaces(): Array<{ name: string; path: string; id: string }> {
+  const workspaceStoragePath = getWorkspaceStoragePath()
+  if (!existsSync(workspaceStoragePath)) return []
+
+  // Look through each workspace directory
+  const workspaces = existsSync(workspaceStoragePath) ? readdirSync(workspaceStoragePath, { withFileTypes: true }) : []
+  const result: Array<{ name: string; path: string; id: string }> = []
+
+  for (const workspace of workspaces) {
+    if (!workspace.isDirectory()) continue
+
+    const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
+    if (!existsSync(workspaceJsonPath)) continue
+
+    try {
+      const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
+      if (workspaceData.folder) {
+        const path = decodeWorkspacePath(workspaceData.folder)
+        const name = basename(path)
+        result.push({
+          name,
+          path,
+          id: workspace.name,
+        })
+      }
+    } catch (error) {
+      console.error(`Error reading workspace ${workspace.name}:`, error)
+    }
+  }
+
+  return result
+}
+
 function findWorkspaceInfo(composerId: string): { name?: string; path?: string } {
   const workspaceStoragePath = getWorkspaceStoragePath()
   if (!existsSync(workspaceStoragePath)) return {}
@@ -367,6 +404,102 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
     }
   } catch (error) {
     spinner.fail('Failed to determine database path')
+    console.error('Error:', error)
+    return []
+  }
+}
+
+/**
+ * Retrieves all conversations for a specific workspace.
+ * @param workspaceName The name of the workspace to filter by
+ * @returns A promise that resolves to an array of conversations for the workspace
+ */
+export async function getConversationsForWorkspace(workspaceName: string): Promise<ConversationData[]> {
+  const spinner = ora({
+    color: 'cyan',
+    spinner: 'dots',
+    text: `Finding conversations for workspace "${workspaceName}"...`,
+  }).start()
+
+  try {
+    const dbPath = getCursorDbPath()
+
+    if (!existsSync(dbPath)) {
+      spinner.fail(`Global database not found at: ${dbPath}`)
+      return []
+    }
+
+    const db = new BetterSqlite3(dbPath, { readonly: true })
+
+    try {
+      // Query for all conversations
+      const rows = db.prepare(
+        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC"
+      ).all() as { key: string; value: string }[]
+
+      if (rows.length === 0) {
+        spinner.info('No conversations found')
+        return []
+      }
+
+      spinner.text = `Found ${rows.length} conversations, filtering for workspace "${workspaceName}"...`
+
+      const workspaceConversations: ConversationData[] = []
+
+      // Process conversations and filter for the specified workspace
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(row.value) as unknown
+
+          if (!isComposerData(parsed)) {
+            continue
+          }
+
+          // Skip conversations without messages
+          if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
+            continue
+          }
+
+          // Process any inline diffs in the conversation
+          for (const message of parsed.conversation) {
+            processInlineDiffs(message)
+          }
+
+          // Get workspace info for this conversation
+          const workspaceInfo = findWorkspaceInfo(parsed.composerId)
+
+          // Skip if workspace name doesn't match
+          if (!workspaceInfo.name || workspaceInfo.name !== workspaceName) {
+            continue
+          }
+
+          const conversation: ConversationData = {
+            composerId: parsed.composerId,
+            context: parsed.context as ConversationData['context'],
+            conversation: parsed.conversation as ConversationData['conversation'],
+            createdAt: parsed.createdAt,
+            name: parsed.name,
+            richText: parsed.richText,
+            text: parsed.text,
+            unifiedMode: parsed.unifiedMode,
+            workspaceName: workspaceInfo.name,
+            workspacePath: workspaceInfo.path,
+          }
+
+          workspaceConversations.push(conversation)
+        } catch {
+          // Skip this conversation if there's an error processing it
+          continue
+        }
+      }
+
+      spinner.succeed(`Found ${workspaceConversations.length} conversations for workspace "${workspaceName}"`)
+      return workspaceConversations
+    } finally {
+      db.close()
+    }
+  } catch (error) {
+    spinner.fail('Error accessing database')
     console.error('Error:', error)
     return []
   }

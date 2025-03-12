@@ -74,6 +74,7 @@
     "default": "pnpm build && ./bin/run.js",
     "extract": "pnpm build && ./bin/run.js --extract",
     "search": "pnpm build && ./bin/run.js --search",
+    "project": "pnpm build && ./bin/run.js --project",
     "lint": "pnpm eslint . --fix",
     "postpack": "shx rm -f oclif.manifest.json",
     "posttest": "pnpm run lint",

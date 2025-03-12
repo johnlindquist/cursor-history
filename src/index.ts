@@ -7,7 +7,13 @@ import { basename, join } from 'node:path'
 
 import type { ConversationData } from './types.js'
 
-import { extractGlobalConversations, getLatestConversation, getLatestConversationForWorkspace } from './db/extract-conversations.js'
+import { 
+  extractGlobalConversations, 
+  getConversationsForWorkspace, 
+  getLatestConversation, 
+  getLatestConversationForWorkspace,
+  listWorkspaces
+} from './db/extract-conversations.js'
 import { getConversationsPath, getOutputDir } from './utils/config.js'
 import { formatConversation, generateConversationFilename } from './utils/formatting.js'
 
@@ -19,18 +25,25 @@ export default class CursorHistory extends Command {
 Extract all conversations to markdown files`,
     `$ chi --search
 Interactively search and view conversations`,
+    `$ chi --project
+Select a workspace, list its conversations, and copy one to clipboard`,
   ]
   static flags = {
     extract: Flags.boolean({
       char: 'e',
       description: 'Extract all conversations to markdown files',
-      exclusive: ['search'],
+      exclusive: ['search', 'project'],
     }),
     help: Flags.help({ char: 'h', description: 'Show CLI help' }),
+    project: Flags.boolean({
+      char: 'p',
+      description: 'Select a workspace, list its conversations, and copy one to clipboard',
+      exclusive: ['extract', 'search'],
+    }),
     search: Flags.boolean({
       char: 's',
       description: 'Interactively search and view conversations',
-      exclusive: ['extract'],
+      exclusive: ['extract', 'project'],
     }),
     version: Flags.boolean({
       char: 'v',
@@ -60,6 +73,9 @@ Interactively search and view conversations`,
       } else if (flags.search) {
         await this.searchConversations()
       }
+    } else if (flags.project) {
+      // Project flag: select workspace, list conversations, select one, copy to clipboard
+      await this.selectWorkspaceAndConversation()
     } else {
       // Default behavior: get latest conversation for current workspace or global latest
 
@@ -85,6 +101,80 @@ Interactively search and view conversations`,
         await this.exportConversation(latestConversation)
       }
     }
+  }
+
+  /**
+   * Allows selecting a workspace, then lists conversations from that workspace,
+   * allows selecting a conversation, and copies it to clipboard.
+   */
+  private async selectWorkspaceAndConversation(): Promise<void> {
+    // Get list of workspaces
+    const workspaces = listWorkspaces()
+
+    if (workspaces.length === 0) {
+      this.log('No workspaces found.')
+      return
+    }
+
+    this.log(`Found ${workspaces.length} workspaces.`)
+
+    // Allow selecting a workspace
+    const selectedWorkspace = await search({
+      message: 'Select a workspace:',
+      source: async (term) => {
+        const termLower = term?.toLowerCase() || ''
+        return workspaces
+          .filter(ws => !term || ws.name.toLowerCase().includes(termLower))
+          .map(ws => ({
+            name: ws.name,
+            value: ws,
+            description: ws.path,
+          }))
+      },
+    })
+
+    if (!selectedWorkspace) {
+      this.log('No workspace selected.')
+      return
+    }
+
+    this.log(`Selected workspace: ${selectedWorkspace.name}`)
+
+    // Get conversations for the selected workspace
+    const workspaceConversations = await getConversationsForWorkspace(selectedWorkspace.name)
+
+    if (workspaceConversations.length === 0) {
+      this.log(`No conversations found for workspace: ${selectedWorkspace.name}`)
+      return
+    }
+
+    this.log(`Found ${workspaceConversations.length} conversations for workspace: ${selectedWorkspace.name}`)
+
+    // Allow selecting a conversation
+    const selectedConversation = await search({
+      message: 'Select a conversation:',
+      source: async (term) => {
+        const termLower = term?.toLowerCase() || ''
+        return workspaceConversations
+          .filter(conv => !term || 
+            (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
+            (conv.text?.toLowerCase() || '').includes(termLower)
+          )
+          .map(conv => ({
+            name: this.getDisplayName(conv),
+            value: conv,
+            description: new Date(conv.createdAt).toLocaleString(),
+          }))
+      },
+    })
+
+    if (!selectedConversation) {
+      this.log('No conversation selected.')
+      return
+    }
+
+    // Export the selected conversation
+    await this.exportConversation(selectedConversation)
   }
 
   private async exportConversation(conversation: ConversationData): Promise<void> {
