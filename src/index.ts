@@ -26,7 +26,7 @@ Extract all conversations to markdown files`,
     `$ chi --search
 Interactively search and view conversations`,
     `$ chi --select
-Select a workspace, list its conversations, and copy one to clipboard`,
+If current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard`,
   ]
   static flags = {
     extract: Flags.boolean({
@@ -37,7 +37,7 @@ Select a workspace, list its conversations, and copy one to clipboard`,
     help: Flags.help({ char: 'h', description: 'Show CLI help' }),
     select: Flags.boolean({
       char: 'l',
-      description: 'Select a workspace, list its conversations, and copy one to clipboard',
+      description: 'If current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard',
       exclusive: ['extract', 'search'],
     }),
     search: Flags.boolean({
@@ -106,6 +106,9 @@ Select a workspace, list its conversations, and copy one to clipboard`,
   /**
    * Allows selecting a workspace, then lists conversations from that workspace,
    * allows selecting a conversation, and copies it to clipboard.
+   * 
+   * If the current directory name matches a workspace name, it will automatically
+   * filter the list to only show conversations from that workspace.
    */
   private async selectWorkspaceAndConversation(): Promise<void> {
     // Get list of workspaces
@@ -118,20 +121,35 @@ Select a workspace, list its conversations, and copy one to clipboard`,
 
     this.log(`Found ${workspaces.length} workspaces.`)
 
-    // Allow selecting a workspace
-    const selectedWorkspace = await search({
-      message: 'Select a workspace:',
-      source: async (term) => {
-        const termLower = term?.toLowerCase() || ''
-        return workspaces
-          .filter(ws => !term || ws.name.toLowerCase().includes(termLower))
-          .map(ws => ({
-            name: ws.name,
-            value: ws,
-            description: ws.path,
-          }))
-      },
-    })
+    // Get current directory name to use as workspace filter
+    const currentDirName = basename(process.cwd())
+    this.log(`Current directory: ${currentDirName}`)
+
+    // Check if current directory matches a workspace
+    const matchingWorkspace = workspaces.find(ws => ws.name === currentDirName)
+
+    let selectedWorkspace: { name: string; path: string; id: string } | undefined
+
+    if (matchingWorkspace) {
+      // If there's a matching workspace, use it directly
+      this.log(`Current directory matches workspace: ${matchingWorkspace.name}`)
+      selectedWorkspace = matchingWorkspace
+    } else {
+      // Otherwise, allow selecting a workspace
+      selectedWorkspace = await search({
+        message: 'Select a workspace:',
+        source: async (term) => {
+          const termLower = term?.toLowerCase() || ''
+          return workspaces
+            .filter(ws => !term || ws.name.toLowerCase().includes(termLower))
+            .map(ws => ({
+              name: ws.name,
+              value: ws,
+              description: ws.path,
+            }))
+        },
+      })
+    }
 
     if (!selectedWorkspace) {
       this.log('No workspace selected.')
