@@ -423,15 +423,28 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
 
   try {
     const dbPath = getCursorDbPath()
+    await new Promise<void>((r) => {
+      setTimeout(r, 50)
+    })
 
     if (!existsSync(dbPath)) {
       spinner.fail(`Global database not found at: ${dbPath}`)
       return []
     }
 
+    spinner.text = `Opening database connection: ${dbPath}`
+    await new Promise<void>((r) => {
+      setTimeout(r, 50)
+    })
+
     const db = new BetterSqlite3(dbPath, { readonly: true })
 
     try {
+      spinner.text = 'Connected to database, querying conversations...'
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
+
       // Query for all conversations
       const rows = db.prepare(
         "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC"
@@ -443,12 +456,25 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
       }
 
       spinner.text = `Found ${rows.length} conversations, filtering for workspace "${workspaceName}"...`
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
 
       const workspaceConversations: ConversationData[] = []
 
       // Process conversations and filter for the specified workspace
+      let processedCount = 0;
       for (const row of rows) {
         try {
+          // Update spinner every 10 items to show progress without slowing down too much
+          if (processedCount % 10 === 0) {
+            spinner.text = `Processed ${processedCount}/${rows.length} conversations...`;
+            await new Promise<void>((r) => {
+              setTimeout(r, 10)
+            });
+          }
+          processedCount++;
+
           const parsed = JSON.parse(row.value) as unknown
 
           if (!isComposerData(parsed)) {
@@ -519,15 +545,28 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
 
   try {
     const dbPath = getCursorDbPath()
+    await new Promise<void>((r) => {
+      setTimeout(r, 50)
+    })
 
     if (!existsSync(dbPath)) {
       spinner.fail(`Global database not found at: ${dbPath}`)
       return null
     }
 
+    spinner.text = `Opening database connection: ${dbPath}`
+    await new Promise<void>((r) => {
+      setTimeout(r, 50)
+    })
+
     const db = new BetterSqlite3(dbPath, { readonly: true })
 
     try {
+      spinner.text = 'Connected to database, querying conversations...'
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
+
       // Query for the 20 most recent conversations
       const rows = db.prepare(
         "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 20"
@@ -539,10 +578,23 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
       }
 
       spinner.text = `Found ${rows.length} recent conversations, searching for workspace "${workspaceName}"...`
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
 
       // Process conversations one by one until we find a suitable one for the workspace
+      let processedCount = 0;
       for (const row of rows) {
         try {
+          // Update spinner every 5 items to show progress without slowing down too much
+          if (processedCount % 5 === 0) {
+            spinner.text = `Checking conversation ${processedCount + 1}/${rows.length} for workspace "${workspaceName}"...`;
+            await new Promise<void>((r) => {
+              setTimeout(r, 10)
+            });
+          }
+          processedCount++;
+
           const parsed = JSON.parse(row.value) as unknown
 
           if (!isComposerData(parsed)) {
@@ -614,15 +666,28 @@ export async function getLatestConversation(): Promise<ConversationData | null> 
 
   try {
     const dbPath = getCursorDbPath()
+    await new Promise<void>((r) => {
+      setTimeout(r, 50)
+    })
 
     if (!existsSync(dbPath)) {
       spinner.fail(`Global database not found at: ${dbPath}`)
       return null
     }
 
+    spinner.text = `Opening database connection: ${dbPath}`
+    await new Promise<void>((r) => {
+      setTimeout(r, 50)
+    })
+
     const db = new BetterSqlite3(dbPath, { readonly: true })
 
     try {
+      spinner.text = 'Connected to database, querying conversations...'
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
+
       // Query for the 20 most recent conversations
       const rows = db.prepare(
         "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 20"
@@ -634,10 +699,23 @@ export async function getLatestConversation(): Promise<ConversationData | null> 
       }
 
       spinner.text = `Found ${rows.length} recent conversations, searching for one with content...`
+      await new Promise<void>((r) => {
+        setTimeout(r, 50)
+      })
 
       // Process conversations one by one until we find a suitable one
+      let processedCount = 0;
       for (const row of rows) {
         try {
+          // Update spinner every 5 items to show progress without slowing down too much
+          if (processedCount % 5 === 0) {
+            spinner.text = `Checking conversation ${processedCount + 1}/${rows.length} for content...`;
+            await new Promise<void>((r) => {
+              setTimeout(r, 10)
+            });
+          }
+          processedCount++;
+
           const parsed = JSON.parse(row.value) as unknown
 
           if (!isComposerData(parsed)) {
