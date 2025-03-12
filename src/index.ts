@@ -25,25 +25,25 @@ export default class CursorHistory extends Command {
 Extract all conversations to markdown files`,
     `$ chi --search
 Interactively search and view conversations`,
-    `$ chi --project
+    `$ chi --select
 Select a workspace, list its conversations, and copy one to clipboard`,
   ]
   static flags = {
     extract: Flags.boolean({
       char: 'e',
       description: 'Extract all conversations to markdown files',
-      exclusive: ['search', 'project'],
+      exclusive: ['search', 'select'],
     }),
     help: Flags.help({ char: 'h', description: 'Show CLI help' }),
-    project: Flags.boolean({
-      char: 'p',
+    select: Flags.boolean({
+      char: 'l',
       description: 'Select a workspace, list its conversations, and copy one to clipboard',
       exclusive: ['extract', 'search'],
     }),
     search: Flags.boolean({
       char: 's',
       description: 'Interactively search and view conversations',
-      exclusive: ['extract', 'project'],
+      exclusive: ['extract', 'select'],
     }),
     version: Flags.boolean({
       char: 'v',
@@ -73,8 +73,8 @@ Select a workspace, list its conversations, and copy one to clipboard`,
       } else if (flags.search) {
         await this.searchConversations()
       }
-    } else if (flags.project) {
-      // Project flag: select workspace, list conversations, select one, copy to clipboard
+    } else if (flags.select) {
+      // Select flag: select workspace, list conversations, select one, copy to clipboard
       await this.selectWorkspaceAndConversation()
     } else {
       // Default behavior: get latest conversation for current workspace or global latest
