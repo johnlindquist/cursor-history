@@ -5,10 +5,7 @@
     "@semantic-release/release-notes-generator",
     "@semantic-release/npm",
     ["@semantic-release/github", {
-      "assets": [
-        {"path": "dist/**/*", "label": "Distribution Package"},
-        {"path": "package.json", "label": "Package Manifest"}
-      ],
+      "assets": false,
       "successComment": false,
       "failComment": false,
       "failTitle": false,
