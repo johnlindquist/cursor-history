@@ -5,7 +5,10 @@
     "@semantic-release/release-notes-generator",
     "@semantic-release/npm",
     ["@semantic-release/github", {
-      "assets": [],
+      "assets": [
+        {"path": "dist/**/*.js", "label": "Distribution"},
+        {"path": "dist/**/*.d.ts", "label": "TypeScript Declarations"}
+      ],
       "successComment": false,
       "failComment": false,
       "failTitle": false,

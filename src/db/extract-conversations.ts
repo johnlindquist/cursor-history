@@ -650,11 +650,13 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
 
       const composerIdsForWorkspace = new Set<string>()
       const workspaceStoragePath = getWorkspaceStoragePath()
-      console.log(`Workspace storage path: ${workspaceStoragePath}`)
+      spinner.text = `Scanning workspaces in: ${workspaceStoragePath}`
 
       if (existsSync(workspaceStoragePath)) {
         const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-        console.log(`Found ${workspaces.length} workspace directories`)
+        spinner.text = `Scanning ${workspaces.length} workspace directories...`
+        let matchingWorkspaces = 0
+        let processedWorkspaces = 0
 
         for (const workspace of workspaces) {
           if (!workspace.isDirectory()) continue
@@ -667,21 +669,19 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
             if (workspaceData.folder) {
               const path = decodeWorkspacePath(workspaceData.folder)
               const name = basename(path)
-              console.log(`Checking workspace: ${name} (${path})`)
+              processedWorkspaces++
+              spinner.text = `Scanning workspaces: ${processedWorkspaces}/${workspaces.length}`
 
               // Check if this is the workspace we're looking for
               // Either the basename matches exactly (case-insensitive), or the workspaceName is contained in the path (case-insensitive)
               if (name.toLowerCase() !== workspaceName.toLowerCase() && !path.toLowerCase().includes(workspaceName.toLowerCase())) {
-                console.log(`Workspace ${name} does not match ${workspaceName}`)
                 continue
               }
-              console.log(`Found matching workspace: ${name} (${path})`)
+              matchingWorkspaces++
+              spinner.text = `Found matching workspace: ${name}`
 
               const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
-              if (!existsSync(dbPath)) {
-                console.log(`Database not found for workspace: ${name} (${path})`)
-                continue
-              }
+              if (!existsSync(dbPath)) continue
 
               const workspaceDb = new BetterSqlite3(dbPath, { readonly: true })
               const result = workspaceDb.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
@@ -696,19 +696,18 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
                   'allComposers' in parsed &&
                   Array.isArray(parsed.allComposers)
                 ) {
-                  console.log(`Found ${parsed.allComposers.length} composers for workspace: ${name} (${path})`)
                   // Add all composerIds for this workspace to our set
+                  let composersAdded = 0
                   for (const composer of parsed.allComposers) {
                     if (typeof composer === 'object' && composer !== null && 'composerId' in composer) {
                       composerIdsForWorkspace.add(composer.composerId as string)
-                      console.log(`Added composerId: ${composer.composerId} for workspace: ${name} (${path})`)
+                      composersAdded++
                     }
                   }
-                } else {
-                  console.log(`No allComposers found for workspace: ${name} (${path})`)
+                  if (composersAdded > 0) {
+                    spinner.text = `Added ${composersAdded} composers from workspace: ${name}`
+                  }
                 }
-              } else {
-                console.log(`No composer.composerData found for workspace: ${name} (${path})`)
               }
 
               workspaceDb.close()
@@ -750,11 +749,9 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
         setTimeout(r, 50)
       })
 
-      console.log(`Looking for conversations with composerIds for workspace "${workspaceName}"...`)
-      console.log(`We have ${composerIdsForWorkspace.size} composerIds to check against`)
-
       // Process conversations one by one until we find a suitable one for the workspace
       let processedCount = 0;
+      let matchedCount = 0;
       for (const row of rows) {
         try {
           // Update spinner every 5 items to show progress without slowing down too much
@@ -769,19 +766,16 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
           const parsed = JSON.parse(row.value) as unknown
 
           if (!isComposerData(parsed)) {
-            console.log(`Skipping conversation because it's not valid composer data: ${row.key}`)
             continue
           }
-
-          console.log(`Checking conversation with composerId: ${parsed.composerId}`)
 
           // Skip if this composerId is not in our target workspace
           if (!composerIdsForWorkspace.has(parsed.composerId)) {
-            console.log(`Skipping conversation because composerId ${parsed.composerId} is not in our target workspace`)
             continue
           }
 
-          console.log(`Found conversation with composerId ${parsed.composerId} for workspace "${workspaceName}"!`)
+          matchedCount++;
+          spinner.text = `Found ${matchedCount} matching conversations for workspace "${workspaceName}"`
 
           // Skip conversations without messages
           if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
