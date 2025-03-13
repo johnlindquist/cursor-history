@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Setup git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "GitHub Actions"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build
+        run: pnpm build
+
+      - name: Package CLI
+        run: |
+          # Create a directory for the release assets
+          mkdir -p release-assets
+          # Create platform-specific archives
+          tar -czf release-assets/chi-${{ env.RELEASE_TAG }}-linux.tar.gz -C dist .
+          zip -r release-assets/chi-${{ env.RELEASE_TAG }}-windows.zip dist/
+          tar -czf release-assets/chi-${{ env.RELEASE_TAG }}-macos.tar.gz -C dist .
+
+      - name: Check Existing Release
+        id: check_release
+        uses: cardinalby/git-get-release-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+        continue-on-error: true
+
+      - name: Create Release
+        id: create_release
+        if: steps.check_release.outcome == 'failure'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          release_name: "Release ${{ env.RELEASE_TAG }}"
+          body: |
+            Cursor History CLI Release ${{ env.RELEASE_TAG }}
+            
+            ## Installation
+            ```bash
+            npm install -g @johnlindquist/cursor-history
+            ```
+            
+            ## Platform-specific binaries
+            - Linux: chi-${{ env.RELEASE_TAG }}-linux.tar.gz
+            - Windows: chi-${{ env.RELEASE_TAG }}-windows.zip
+            - macOS: chi-${{ env.RELEASE_TAG }}-macos.tar.gz
+          draft: false
+          prerelease: false
+
+      - name: Set Upload URL
+        id: set_upload_url
+        run: |
+          if [ "${{ steps.check_release.outcome }}" = "success" ]; then
+            echo "upload_url=${{ steps.check_release.outputs.upload_url }}" >> $GITHUB_OUTPUT
+          else
+            echo "upload_url=${{ steps.create_release.outputs.upload_url }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Linux Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.set_upload_url.outputs.upload_url }}
+          asset_path: ./release-assets/chi-${{ env.RELEASE_TAG }}-linux.tar.gz
+          asset_name: chi-${{ env.RELEASE_TAG }}-linux.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload Windows Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.set_upload_url.outputs.upload_url }}
+          asset_path: ./release-assets/chi-${{ env.RELEASE_TAG }}-windows.zip
+          asset_name: chi-${{ env.RELEASE_TAG }}-windows.zip
+          asset_content_type: application/zip
+
+      - name: Upload macOS Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.set_upload_url.outputs.upload_url }}
+          asset_path: ./release-assets/chi-${{ env.RELEASE_TAG }}-macos.tar.gz
+          asset_name: chi-${{ env.RELEASE_TAG }}-macos.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Publish to npm
+        run: pnpm publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} 
