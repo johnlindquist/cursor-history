@@ -1,4 +1,4 @@
-import type {ConversationData, FileChange, Message} from '../types.js'
+import type { ConversationData, FileChange, Message } from '../types.js'
 
 /**
  * Formats a numeric timestamp into an ISO string.
@@ -40,14 +40,14 @@ export function formatMessage(message: Message): null | string {
     (message.type === '1' || message.type === 1
       ? 'User'
       : message.type === '2' || message.type === 2
-      ? 'Assistant'
-      : 'Unknown')
+        ? 'Assistant'
+        : 'Unknown')
 
   let output = `### ${role}\n\n`
 
   // Add timing information if available
   if (message.timingInfo) {
-    const {clientEndTime, clientStartTime} = message.timingInfo
+    const { clientEndTime, clientStartTime } = message.timingInfo
     if (clientStartTime && clientEndTime) {
       const formattedStart = new Date(clientStartTime).toLocaleString()
       const formattedEnd = new Date(clientEndTime).toLocaleString()
@@ -102,6 +102,33 @@ export function formatMessage(message: Message): null | string {
         output += `- Line Range: ${message.metadata.cursorContextStartLine}-${message.metadata.cursorContextEndLine}\n`
       }
 
+      output += '\n'
+    }
+
+    // Add any remaining metadata fields not explicitly handled
+    const knownKeys = [
+      'cursorContextFiles',
+      'cursorContextLines',
+      'cursorContextSelectedCode',
+      'cursorContextSelectedFile',
+      'cursorContextStartLine',
+      'cursorContextEndLine',
+      'cursorContextLanguage',
+      'cursorContextFileType',
+      'cursorContextGitBranch',
+      'cursorContextGitRepo',
+      'cursorContextProjectRoot'
+    ]
+
+    const extraMetadataEntries = Object.entries(message.metadata).filter(
+      ([key]) => !knownKeys.includes(key)
+    )
+
+    if (extraMetadataEntries.length > 0) {
+      output += '**Additional Metadata:**\n'
+      for (const [key, value] of extraMetadataEntries) {
+        output += `- **${key}**: ${JSON.stringify(value, null, 2)}\n`
+      }
       output += '\n'
     }
   }
