@@ -106,7 +106,7 @@ export function formatMessage(message: Message): null | string {
     }
 
     // Add any remaining metadata fields not explicitly handled
-    const knownKeys = [
+    const knownKeys = new Set([
       'cursorContextFiles',
       'cursorContextLines',
       'cursorContextSelectedCode',
@@ -118,10 +118,10 @@ export function formatMessage(message: Message): null | string {
       'cursorContextGitBranch',
       'cursorContextGitRepo',
       'cursorContextProjectRoot'
-    ]
+    ])
 
     const extraMetadataEntries = Object.entries(message.metadata).filter(
-      ([key]) => !knownKeys.includes(key)
+      ([key]) => !knownKeys.has(key)
     )
 
     if (extraMetadataEntries.length > 0) {
@@ -129,6 +129,7 @@ export function formatMessage(message: Message): null | string {
       for (const [key, value] of extraMetadataEntries) {
         output += `- **${key}**: ${JSON.stringify(value, null, 2)}\n`
       }
+
       output += '\n'
     }
   }

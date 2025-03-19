@@ -1,16 +1,17 @@
 import { expect } from 'chai'
+
 import { formatMessage } from '../../src/utils/formatting.js'
 
 describe('Metadata rendering', () => {
     it('should include extra metadata fields in the output', () => {
         const message = {
-            role: 'Assistant',
-            text: 'Some assistant text',
             metadata: {
-                customKey: 'customValue',
                 anotherCustomKey: { nested: 'object', with: ['array', 'values'] },
-                cursorContextFiles: ['file1.ts', 'file2.ts']
-            }
+                cursorContextFiles: ['file1.ts', 'file2.ts'],
+                customKey: 'customValue'
+            },
+            role: 'Assistant',
+            text: 'Some assistant text'
         }
 
         const result = formatMessage(message as any)
@@ -26,14 +27,14 @@ describe('Metadata rendering', () => {
 
     it('should not include additional metadata section when there are no extra fields', () => {
         const message = {
-            role: 'Assistant',
-            text: 'Some assistant text',
             metadata: {
+                cursorContextEndLine: 20,
                 cursorContextFiles: ['file1.ts'],
                 cursorContextSelectedFile: 'file1.ts',
-                cursorContextStartLine: 10,
-                cursorContextEndLine: 20
-            }
+                cursorContextStartLine: 10
+            },
+            role: 'Assistant',
+            text: 'Some assistant text'
         }
 
         const result = formatMessage(message as any)
