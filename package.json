@@ -16,7 +16,8 @@
     "clipboardy": "^4.0.0",
     "conf": "^13.1.0",
     "ora": "^8.2.0",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "tiktoken": "^1.0.20"
   },
   "devDependencies": {
     "@eslint/compat": "^1",

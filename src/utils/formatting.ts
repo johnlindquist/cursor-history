@@ -1,4 +1,5 @@
-import type {ConversationData, FileChange, Message} from '../types.js'
+import type { ConversationData, FileChange, Message } from '../types.js'
+import { countTokens } from './tokenCounter.js'
 
 /**
  * Formats a numeric timestamp into an ISO string.
@@ -40,14 +41,14 @@ export function formatMessage(message: Message): null | string {
     (message.type === '1' || message.type === 1
       ? 'User'
       : message.type === '2' || message.type === 2
-      ? 'Assistant'
-      : 'Unknown')
+        ? 'Assistant'
+        : 'Unknown')
 
   let output = `### ${role}\n\n`
 
   // Add timing information if available
   if (message.timingInfo) {
-    const {clientEndTime, clientStartTime} = message.timingInfo
+    const { clientEndTime, clientStartTime } = message.timingInfo
     if (clientStartTime && clientEndTime) {
       const formattedStart = new Date(clientStartTime).toLocaleString()
       const formattedEnd = new Date(clientEndTime).toLocaleString()
@@ -183,7 +184,7 @@ export function formatMessage(message: Message): null | string {
 /**
  * Formats a conversation into Markdown.
  */
-export function formatConversation(conversation: ConversationData): string {
+export function formatConversation(conversation: ConversationData, model: string = 'gpt-4'): string {
   let output = ''
 
   // Add header with conversation info
@@ -196,13 +197,22 @@ export function formatConversation(conversation: ConversationData): string {
   }
 
   // Format each message
+  let totalTokens = 0
   for (const message of conversation.conversation) {
     const formatted = formatMessage(message)
     if (formatted) {
       output += formatted
+      totalTokens += countTokens(message.content || '', model)
+      if (message.codeBlocks) {
+        for (const block of message.codeBlocks) {
+          totalTokens += countTokens(block.content || block.code || '', model)
+        }
+      }
     }
   }
 
+  // Add token count to footer
+  output += `\n✓ Token count: ${totalTokens.toLocaleString()} tokens\n`
   return output
 }
 
