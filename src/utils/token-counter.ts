@@ -1,12 +1,12 @@
-import { encoding_for_model } from "tiktoken";
+import { encoding_for_model, TiktokenModel } from "tiktoken";
 
 // Supported models and their encodings
-const MODEL_ENCODINGS: Record<string, string> = {
-    "gpt-4": "cl100k_base",
-    "gpt-3.5-turbo": "cl100k_base"
+const MODEL_ENCODINGS: Record<TiktokenModel, string> = {
+    "gpt-3.5-turbo": "cl100k_base",
+    "gpt-4": "cl100k_base"
 };
 
-export function countTokens(text: string, model = "gpt-4"): number {
+export function countTokens(text: string, model: TiktokenModel = "gpt-4"): number {
     const encodingName = MODEL_ENCODINGS[model];
     if (!encodingName) {
         throw new Error(`Unsupported model: ${model}`);

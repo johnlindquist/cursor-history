@@ -1,4 +1,6 @@
-import type {ConversationData, FileChange, Message} from '../types.js'
+import type { ConversationData, FileChange, Message } from '../types.js'
+import { TiktokenModel } from "tiktoken";
+import { countTokens } from "./token-counter.js";
 
 /**
  * Formats a numeric timestamp into an ISO string.
@@ -40,14 +42,14 @@ export function formatMessage(message: Message): null | string {
     (message.type === '1' || message.type === 1
       ? 'User'
       : message.type === '2' || message.type === 2
-      ? 'Assistant'
-      : 'Unknown')
+        ? 'Assistant'
+        : 'Unknown')
 
   let output = `### ${role}\n\n`
 
   // Add timing information if available
   if (message.timingInfo) {
-    const {clientEndTime, clientStartTime} = message.timingInfo
+    const { clientEndTime, clientStartTime } = message.timingInfo
     if (clientStartTime && clientEndTime) {
       const formattedStart = new Date(clientStartTime).toLocaleString()
       const formattedEnd = new Date(clientEndTime).toLocaleString()
@@ -183,7 +185,12 @@ export function formatMessage(message: Message): null | string {
 /**
  * Formats a conversation into Markdown.
  */
-export function formatConversation(conversation: ConversationData): string {
+export function formatConversation(conversation: ConversationData, options: {
+  noTokenCount?: boolean;
+  model?: TiktokenModel;
+} = {}): string {
+  const { noTokenCount = false, model = "gpt-4" } = options;
+
   let output = ''
 
   // Add header with conversation info
@@ -203,7 +210,9 @@ export function formatConversation(conversation: ConversationData): string {
     }
   }
 
-  return output
+  const markdown = output;
+
+  return formatWithTokenCount(markdown, model, !noTokenCount);
 }
 
 /**
@@ -234,4 +243,19 @@ export function generateConversationFilename(conversation: ConversationData): st
     .replaceAll(/^-|-$/g, '')
 
   return `${sanitizedWorkspace}-${dateStr}-${timeStr}-${sanitizedName}.md`
+}
+
+export function formatTokenCountMessage(count: number): string {
+  return `✓ Token count: ${count.toLocaleString()} tokens`;
+}
+
+export function formatWithTokenCount(
+  content: string,
+  model: TiktokenModel = "gpt-4",
+  showCount = true
+): string {
+  if (!showCount) return content;
+
+  const count = countTokens(content, model);
+  return `${content}\n\n${formatTokenCountMessage(count)}`;
 }

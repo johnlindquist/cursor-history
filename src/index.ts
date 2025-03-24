@@ -211,7 +211,12 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
   }
 
   private async exportConversation(conversation: ConversationData): Promise<void> {
-    const markdown = formatConversation(conversation)
+    const { flags } = await this.parse(CursorHistory)
+
+    const markdown = formatConversation(conversation, {
+      noTokenCount: flags['no-token-count'],
+      model: flags.model,
+    })
 
     // Write to temp file
     const tempDir = tmpdir()
@@ -227,13 +232,18 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
   }
 
   private async extractConversations(): Promise<void> {
+    const { flags } = await this.parse(CursorHistory)
+
     this.log('Starting conversation extraction...')
     const outputDir = getOutputDir()
 
     // Create individual conversation files
     const indexEntries: string[] = []
     for (const conv of this.conversations) {
-      const markdown = formatConversation(conv)
+      const markdown = formatConversation(conv, {
+        noTokenCount: flags['no-token-count'],
+        model: flags.model,
+      })
       const filename = generateConversationFilename(conv)
       const outputPath = join(outputDir, filename)
       writeFileSync(outputPath, markdown)
