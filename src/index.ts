@@ -7,10 +7,10 @@ import { basename, join } from 'node:path'
 
 import type { ConversationData } from './types.js'
 
-import { 
-  extractGlobalConversations, 
-  getConversationsForWorkspace, 
-  getLatestConversation, 
+import {
+  extractGlobalConversations,
+  getConversationsForWorkspace,
+  getLatestConversation,
   getLatestConversationForWorkspace,
   listWorkspaces
 } from './db/extract-conversations.js'
@@ -48,6 +48,14 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
     version: Flags.boolean({
       char: 'v',
       description: 'Show CLI version',
+    }),
+    'no-token-count': Flags.boolean({
+      description: 'Disable token counting in output',
+      default: false,
+    }),
+    model: Flags.string({
+      description: 'Which model to use for token counting',
+      default: 'gpt-4',
     }),
   }
   private conversations: ConversationData[] = []
@@ -127,7 +135,7 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
 
     // Check if current directory matches a workspace
     // Either the workspace name matches exactly (case-insensitive), or the currentDirName is contained in the workspace path (case-insensitive)
-    const matchingWorkspace = workspaces.find(ws => 
+    const matchingWorkspace = workspaces.find(ws =>
       ws.name.toLowerCase() === currentDirName.toLowerCase() || ws.path.toLowerCase().includes(currentDirName.toLowerCase())
     )
 
@@ -181,7 +189,7 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
       source: async (term) => {
         const termLower = term?.toLowerCase() || ''
         return workspaceConversations
-          .filter(conv => !term || 
+          .filter(conv => !term ||
             (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
             (conv.text?.toLowerCase() || '').includes(termLower)
           )
