@@ -16,6 +16,7 @@ import {
 } from './db/extract-conversations.js'
 import { getConversationsPath, getOutputDir } from './utils/config.js'
 import { formatConversation, generateConversationFilename } from './utils/formatting.js'
+import { countTokens } from './utils/tokenCounter.js'
 
 export default class CursorHistory extends Command {
   static description = 'Manage and search Cursor conversation history'
@@ -35,27 +36,27 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
       exclusive: ['search', 'select'],
     }),
     help: Flags.help({ char: 'h', description: 'Show CLI help' }),
-    select: Flags.boolean({
-      char: 'l',
-      description: 'If current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard',
-      exclusive: ['extract', 'search'],
+    model: Flags.string({
+      default: 'gpt-4',
+      description: 'Which model to use for token counting',
+    }),
+    'no-token-count': Flags.boolean({
+      default: false,
+      description: 'Disable token counting in output',
     }),
     search: Flags.boolean({
       char: 's',
       description: 'Interactively search and view conversations',
       exclusive: ['extract', 'select'],
     }),
+    select: Flags.boolean({
+      char: 'l',
+      description: 'If current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard',
+      exclusive: ['extract', 'search'],
+    }),
     version: Flags.boolean({
       char: 'v',
       description: 'Show CLI version',
-    }),
-    'no-token-count': Flags.boolean({
-      description: 'Disable token counting in output',
-      default: false,
-    }),
-    model: Flags.string({
-      description: 'Which model to use for token counting',
-      default: 'gpt-4',
     }),
   }
   private conversations: ConversationData[] = []
@@ -111,112 +112,9 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
     }
   }
 
-  /**
-   * Allows selecting a workspace, then lists conversations from that workspace,
-   * allows selecting a conversation, and copies it to clipboard.
-   * 
-   * If the current directory name matches a workspace name, it will automatically
-   * filter the list to only show conversations from that workspace.
-   */
-  private async selectWorkspaceAndConversation(): Promise<void> {
-    // Get list of workspaces
-    const workspaces = listWorkspaces()
-
-    if (workspaces.length === 0) {
-      this.log('No workspaces found.')
-      return
-    }
-
-    this.log(`Found ${workspaces.length} workspaces.`)
-
-    // Get current directory name to use as workspace filter
-    const currentDirName = basename(process.cwd())
-    this.log(`Current directory: ${currentDirName}`)
-
-    // Check if current directory matches a workspace
-    // Either the workspace name matches exactly (case-insensitive), or the currentDirName is contained in the workspace path (case-insensitive)
-    const matchingWorkspace = workspaces.find(ws =>
-      ws.name.toLowerCase() === currentDirName.toLowerCase() || ws.path.toLowerCase().includes(currentDirName.toLowerCase())
-    )
-
-    let selectedWorkspace: { name: string; path: string; id: string } | undefined
-
-    if (matchingWorkspace) {
-      // If there's a matching workspace, use it directly
-      this.log(`Current directory matches workspace: ${matchingWorkspace.name}`)
-      selectedWorkspace = matchingWorkspace
-    } else {
-      // Otherwise, allow selecting a workspace
-      selectedWorkspace = await search({
-        message: 'Select a workspace:',
-        source: async (term) => {
-          const termLower = term?.toLowerCase() || ''
-          return workspaces
-            .filter(ws => !term || ws.name.toLowerCase().includes(termLower))
-            .map(ws => ({
-              name: ws.name,
-              value: ws,
-              description: ws.path,
-            }))
-        },
-      })
-    }
-
-    if (!selectedWorkspace) {
-      this.log('No workspace selected.')
-      return
-    }
-
-    this.log(`Selected workspace: ${selectedWorkspace.name}`)
-
-    // Get conversations for the selected workspace
-    // If the current directory matches a workspace, use the current directory name
-    // Otherwise, use the selected workspace's name
-    const workspaceNameToUse = matchingWorkspace ? currentDirName : selectedWorkspace.name
-    this.log(`Using workspace name: ${workspaceNameToUse} for conversation lookup`)
-    const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse)
-
-    if (workspaceConversations.length === 0) {
-      this.log(`No conversations found for workspace: ${selectedWorkspace.name}`)
-      return
-    }
-
-    this.log(`Found ${workspaceConversations.length} conversations for workspace: ${selectedWorkspace.name}`)
-
-    // Allow selecting a conversation
-    const selectedConversation = await search({
-      message: 'Select a conversation:',
-      source: async (term) => {
-        const termLower = term?.toLowerCase() || ''
-        return workspaceConversations
-          .filter(conv => !term ||
-            (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
-            (conv.text?.toLowerCase() || '').includes(termLower)
-          )
-          .map(conv => ({
-            name: this.getDisplayName(conv),
-            value: conv,
-            description: new Date(conv.createdAt).toLocaleString(),
-          }))
-      },
-    })
-
-    if (!selectedConversation) {
-      this.log('No conversation selected.')
-      return
-    }
-
-    // Export the selected conversation
-    await this.exportConversation(selectedConversation)
-  }
-
   private async exportConversation(conversation: ConversationData): Promise<void> {
     const { flags } = await this.parse(CursorHistory)
-
-    const markdown = formatConversation(conversation, {
-      noTokenCount: flags['no-token-count'],
-      model: flags.model,
-    })
+    const markdown = formatConversation(conversation, flags.model)
 
     // Write to temp file
     const tempDir = tmpdir()
@@ -229,21 +127,23 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
 
     this.log(`\nConversation exported to: ${outputPath}`)
     this.log('Content has been copied to clipboard.')
+
+    // Add token count to output message
+    if (!flags['no-token-count']) {
+      const totalTokens = countTokens(markdown, flags.model)
+      this.log(`✓ Token count: ${totalTokens.toLocaleString()} tokens`)
+    }
   }
 
   private async extractConversations(): Promise<void> {
     const { flags } = await this.parse(CursorHistory)
-
     this.log('Starting conversation extraction...')
     const outputDir = getOutputDir()
 
     // Create individual conversation files
     const indexEntries: string[] = []
     for (const conv of this.conversations) {
-      const markdown = formatConversation(conv, {
-        noTokenCount: flags['no-token-count'],
-        model: flags.model,
-      })
+      const markdown = formatConversation(conv, flags.model)
       const filename = generateConversationFilename(conv)
       const outputPath = join(outputDir, filename)
       writeFileSync(outputPath, markdown)
@@ -298,5 +198,104 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
         name: this.getDisplayName(conv),
         value: conv,
       }))
+  }
+
+  /**
+   * Allows selecting a workspace, then lists conversations from that workspace,
+   * allows selecting a conversation, and copies it to clipboard.
+   * 
+   * If the current directory name matches a workspace name, it will automatically
+   * filter the list to only show conversations from that workspace.
+   */
+  private async selectWorkspaceAndConversation(): Promise<void> {
+    // Get list of workspaces
+    const workspaces = listWorkspaces()
+
+    if (workspaces.length === 0) {
+      this.log('No workspaces found.')
+      return
+    }
+
+    this.log(`Found ${workspaces.length} workspaces.`)
+
+    // Get current directory name to use as workspace filter
+    const currentDirName = basename(process.cwd())
+    this.log(`Current directory: ${currentDirName}`)
+
+    // Check if current directory matches a workspace
+    // Either the workspace name matches exactly (case-insensitive), or the currentDirName is contained in the workspace path (case-insensitive)
+    const matchingWorkspace = workspaces.find(ws =>
+      ws.name.toLowerCase() === currentDirName.toLowerCase() || ws.path.toLowerCase().includes(currentDirName.toLowerCase())
+    )
+
+    let selectedWorkspace: undefined | { id: string; name: string; path: string; }
+
+    if (matchingWorkspace) {
+      // If there's a matching workspace, use it directly
+      this.log(`Current directory matches workspace: ${matchingWorkspace.name}`)
+      selectedWorkspace = matchingWorkspace
+    } else {
+      // Otherwise, allow selecting a workspace
+      selectedWorkspace = await search({
+        message: 'Select a workspace:',
+        async source(term) {
+          const termLower = term?.toLowerCase() || ''
+          return workspaces
+            .filter(ws => !term || ws.name.toLowerCase().includes(termLower))
+            .map(ws => ({
+              description: ws.path,
+              name: ws.name,
+              value: ws,
+            }))
+        },
+      })
+    }
+
+    if (!selectedWorkspace) {
+      this.log('No workspace selected.')
+      return
+    }
+
+    this.log(`Selected workspace: ${selectedWorkspace.name}`)
+
+    // Get conversations for the selected workspace
+    // If the current directory matches a workspace, use the current directory name
+    // Otherwise, use the selected workspace's name
+    const workspaceNameToUse = matchingWorkspace ? currentDirName : selectedWorkspace.name
+    this.log(`Using workspace name: ${workspaceNameToUse} for conversation lookup`)
+    const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse)
+
+    if (workspaceConversations.length === 0) {
+      this.log(`No conversations found for workspace: ${selectedWorkspace.name}`)
+      return
+    }
+
+    this.log(`Found ${workspaceConversations.length} conversations for workspace: ${selectedWorkspace.name}`)
+
+    // Allow selecting a conversation
+    const selectedConversation = await search({
+      message: 'Select a conversation:',
+      source: async (term) => {
+        const termLower = term?.toLowerCase() || ''
+        return workspaceConversations
+          .filter(conv => !term ||
+            (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
+            (conv.text?.toLowerCase() || '').includes(termLower)
+          )
+          .map(conv => ({
+            description: new Date(conv.createdAt).toLocaleString(),
+            name: this.getDisplayName(conv),
+            value: conv,
+          }))
+      },
+    })
+
+    if (!selectedConversation) {
+      this.log('No conversation selected.')
+      return
+    }
+
+    // Export the selected conversation
+    await this.exportConversation(selectedConversation)
   }
 }

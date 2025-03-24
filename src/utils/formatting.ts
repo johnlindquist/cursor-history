@@ -1,6 +1,5 @@
 import type { ConversationData, FileChange, Message } from '../types.js'
-import { TiktokenModel } from "tiktoken";
-import { countTokens } from "./token-counter.js";
+import { countTokens } from './tokenCounter.js'
 
 /**
  * Formats a numeric timestamp into an ISO string.
@@ -185,12 +184,7 @@ export function formatMessage(message: Message): null | string {
 /**
  * Formats a conversation into Markdown.
  */
-export function formatConversation(conversation: ConversationData, options: {
-  noTokenCount?: boolean;
-  model?: TiktokenModel;
-} = {}): string {
-  const { noTokenCount = false, model = "gpt-4" } = options;
-
+export function formatConversation(conversation: ConversationData, model: string = 'gpt-4'): string {
   let output = ''
 
   // Add header with conversation info
@@ -203,16 +197,23 @@ export function formatConversation(conversation: ConversationData, options: {
   }
 
   // Format each message
+  let totalTokens = 0
   for (const message of conversation.conversation) {
     const formatted = formatMessage(message)
     if (formatted) {
       output += formatted
+      totalTokens += countTokens(message.content || '', model)
+      if (message.codeBlocks) {
+        for (const block of message.codeBlocks) {
+          totalTokens += countTokens(block.content || block.code || '', model)
+        }
+      }
     }
   }
 
-  const markdown = output;
-
-  return formatWithTokenCount(markdown, model, !noTokenCount);
+  // Add token count to footer
+  output += `\n✓ Token count: ${totalTokens.toLocaleString()} tokens\n`
+  return output
 }
 
 /**
@@ -243,19 +244,4 @@ export function generateConversationFilename(conversation: ConversationData): st
     .replaceAll(/^-|-$/g, '')
 
   return `${sanitizedWorkspace}-${dateStr}-${timeStr}-${sanitizedName}.md`
-}
-
-export function formatTokenCountMessage(count: number): string {
-  return `✓ Token count: ${count.toLocaleString()} tokens`;
-}
-
-export function formatWithTokenCount(
-  content: string,
-  model: TiktokenModel = "gpt-4",
-  showCount = true
-): string {
-  if (!showCount) return content;
-
-  const count = countTokens(content, model);
-  return `${content}\n\n${formatTokenCountMessage(count)}`;
 }

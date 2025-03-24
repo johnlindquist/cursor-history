@@ -13,7 +13,6 @@ A new CLI generated with oclif
 * [Installation](#installation)
 * [Usage](#usage)
 * [Commands](#commands)
-* [Token Counting](#token-counting)
 <!-- tocstop -->
 
 # Installation
@@ -76,19 +75,3 @@ DESCRIPTION
   Update installed plugins.
 ```
 <!-- commandsstop -->
-
-## Token Counting
-
-The CLI includes token counting using tiktoken:
-
-```bash
-chi # Default: counts tokens using GPT-4
-chi --model gpt-3.5-turbo # Count tokens for GPT-3.5
-chi --no-token-count # Disable counting
-```
-
-Supported models:
-- gpt-4
-- gpt-3.5-turbo
-
-Token counts are displayed at the end of each conversation export.
