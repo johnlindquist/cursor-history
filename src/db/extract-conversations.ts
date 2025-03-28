@@ -263,10 +263,14 @@ function findWorkspaceInfo(composerId: string): { name?: string; path?: string }
 
 /**
  * Extracts conversations from the global database and returns them.
- * @param limit Optional limit on number of conversations to return
+ * @param options Optional parameters for the extraction
  * @returns A promise that resolves to an array of conversations
  */
-export async function extractGlobalConversations(limit?: number): Promise<ConversationData[]> {
+export async function extractGlobalConversations(options?: {
+  limit?: number
+  sinceTimestamp?: number
+  untilTimestamp?: number
+}): Promise<ConversationData[]> {
   const spinner = ora({
     color: 'cyan',
     spinner: 'dots',
@@ -300,16 +304,37 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
         setTimeout(r, 50)
       })
 
-      // If we only need one conversation, optimize the query
-      const query =
-        limit === 1
-          ? "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 1"
-          : "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
+      // Date range filtering condition
+      let dateCondition = ''
+      const params: any[] = []
 
-      const rows = db.prepare(query).all() as {
-        key: string
-        value: string
-      }[]
+      if (options?.sinceTimestamp !== undefined && options.untilTimestamp !== undefined) {
+        // Both since and until provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) BETWEEN ? AND ?'
+        params.push(options.sinceTimestamp, options.untilTimestamp)
+      } else if (options?.sinceTimestamp !== undefined) {
+        // Only since provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) >= ?'
+        params.push(options.sinceTimestamp)
+      } else if (options?.untilTimestamp !== undefined) {
+        // Only until provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) <= ?'
+        params.push(options.untilTimestamp)
+      }
+
+      // If we only need one conversation, optimize the query
+      let query: string
+      if (options?.limit === 1) {
+        query = `SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ${dateCondition} ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 1`
+      } else {
+        query = `SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ${dateCondition}`
+      }
+
+      // Execute the query with date range parameters if present
+      const stmt = db.prepare(query)
+      const rows = params.length > 0
+        ? stmt.all(...params) as { key: string; value: string }[]
+        : stmt.all() as { key: string; value: string }[]
 
       spinner.text = `Found ${rows.length} potential conversations, beginning processing...`
       await new Promise<void>((r) => {
@@ -390,7 +415,7 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
           return bTime - aTime // Sort descending
         })
         spinner.succeed(`Found ${processedConversations.length} conversations with content`)
-        return limit ? sorted.slice(0, limit) : sorted
+        return options?.limit ? sorted.slice(0, options.limit) : sorted
       }
 
       spinner.info('No conversations with content found')
@@ -412,9 +437,16 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
 /**
  * Retrieves all conversations for a specific workspace.
  * @param workspaceName The name of the workspace to filter by
+ * @param options Optional filtering parameters
  * @returns A promise that resolves to an array of conversations for the workspace
  */
-export async function getConversationsForWorkspace(workspaceName: string): Promise<ConversationData[]> {
+export async function getConversationsForWorkspace(
+  workspaceName: string,
+  options?: {
+    sinceTimestamp?: number
+    untilTimestamp?: number
+  }
+): Promise<ConversationData[]> {
   const spinner = ora({
     color: 'cyan',
     spinner: 'dots',
@@ -440,87 +472,35 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
     const db = new BetterSqlite3(dbPath, { readonly: true })
 
     try {
-      // First, build a mapping of composerIds to workspaces for the target workspace
-      spinner.text = `Building composerId mapping for workspace "${workspaceName}"...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      const composerIdsForWorkspace = new Set<string>()
-      const workspaceStoragePath = getWorkspaceStoragePath()
-
-      if (existsSync(workspaceStoragePath)) {
-        const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-
-        for (const workspace of workspaces) {
-          if (!workspace.isDirectory()) continue
-
-          const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
-          if (!existsSync(workspaceJsonPath)) continue
-
-          try {
-            const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
-            if (workspaceData.folder) {
-              const path = decodeWorkspacePath(workspaceData.folder)
-              const name = basename(path)
-
-              // Check if this is the workspace we're looking for
-              // Either the basename matches exactly (case-insensitive), or the workspaceName is contained in the path (case-insensitive)
-              if (name.toLowerCase() !== workspaceName.toLowerCase() && !path.toLowerCase().includes(workspaceName.toLowerCase())) continue
-
-              const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
-              if (!existsSync(dbPath)) continue
-
-              const workspaceDb = new BetterSqlite3(dbPath, { readonly: true })
-              const result = workspaceDb.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
-                | undefined
-                | { value: string }
-
-              if (result) {
-                const parsed = JSON.parse(result.value) as unknown
-                if (
-                  typeof parsed === 'object' &&
-                  parsed !== null &&
-                  'allComposers' in parsed &&
-                  Array.isArray(parsed.allComposers)
-                ) {
-                  // Add all composerIds for this workspace to our set
-                  for (const composer of parsed.allComposers) {
-                    if (typeof composer === 'object' && composer !== null && 'composerId' in composer) {
-                      composerIdsForWorkspace.add(composer.composerId as string)
-                    }
-                  }
-                }
-              }
-
-              workspaceDb.close()
-            }
-          } catch (error) {
-            console.error(`Error processing workspace ${workspace.name}:`, error)
-          }
-        }
-      }
-
-      spinner.text = `Found ${composerIdsForWorkspace.size} composerIds for workspace "${workspaceName}"`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // If we didn't find any composerIds for this workspace, return empty result
-      if (composerIdsForWorkspace.size === 0) {
-        spinner.info(`No composerIds found for workspace "${workspaceName}"`)
-        return []
-      }
-
       spinner.text = 'Connected to database, querying conversations...'
       await new Promise<void>((r) => {
         setTimeout(r, 50)
       })
 
-      // Query for all conversations
-      const rows = db.prepare(
-        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC"
-      ).all() as { key: string; value: string }[]
+      // Date range filtering condition
+      let dateCondition = ''
+      const params: any[] = []
+
+      if (options?.sinceTimestamp !== undefined && options?.untilTimestamp !== undefined) {
+        // Both since and until provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) BETWEEN ? AND ?'
+        params.push(options.sinceTimestamp, options.untilTimestamp)
+      } else if (options?.sinceTimestamp !== undefined) {
+        // Only since provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) >= ?'
+        params.push(options.sinceTimestamp)
+      } else if (options?.untilTimestamp !== undefined) {
+        // Only until provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) <= ?'
+        params.push(options.untilTimestamp)
+      }
+
+      // Query for all conversations with date filtering
+      const query = `SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ${dateCondition} ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC`
+      const stmt = db.prepare(query)
+      const rows = params.length > 0
+        ? stmt.all(...params) as { key: string; value: string }[]
+        : stmt.all() as { key: string; value: string }[]
 
       if (rows.length === 0) {
         spinner.info('No conversations found')
@@ -553,11 +533,6 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
             continue
           }
 
-          // Skip if this composerId is not in our target workspace
-          if (!composerIdsForWorkspace.has(parsed.composerId)) {
-            continue
-          }
-
           // Skip conversations without messages
           if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
             continue
@@ -572,7 +547,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
           const workspaceInfo = { name: workspaceName, path: '' }
 
           // Get the full path if needed
-          if (composerIdsForWorkspace.has(parsed.composerId)) {
+          if (parsed.composerId) {
             const fullWorkspaceInfo = findWorkspaceInfo(parsed.composerId)
             if (fullWorkspaceInfo.path) {
               workspaceInfo.path = fullWorkspaceInfo.path
@@ -614,229 +589,29 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
 /**
  * Retrieves the latest conversation for a specific workspace.
  * @param workspaceName The name of the workspace to filter by
+ * @param options Optional filtering parameters
  * @returns A promise that resolves to the latest conversation for the workspace, or null if none found
  */
-export async function getLatestConversationForWorkspace(workspaceName: string): Promise<ConversationData | null> {
-  const spinner = ora({
-    color: 'cyan',
-    spinner: 'dots',
-    text: `Finding latest conversation for workspace "${workspaceName}"...`,
-  }).start()
-
-  try {
-    const dbPath = getCursorDbPath()
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    if (!existsSync(dbPath)) {
-      spinner.fail(`Global database not found at: ${dbPath}`)
-      return null
-    }
-
-    spinner.text = `Opening database connection: ${dbPath}`
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    const db = new BetterSqlite3(dbPath, { readonly: true })
-
-    try {
-      // First, build a mapping of composerIds to workspaces for the target workspace
-      spinner.text = `Building composerId mapping for workspace "${workspaceName}"...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      const composerIdsForWorkspace = new Set<string>()
-      const workspaceStoragePath = getWorkspaceStoragePath()
-      spinner.text = `Scanning workspaces in: ${workspaceStoragePath}`
-
-      if (existsSync(workspaceStoragePath)) {
-        const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-        spinner.text = `Scanning ${workspaces.length} workspace directories...`
-        let matchingWorkspaces = 0
-        let processedWorkspaces = 0
-
-        for (const workspace of workspaces) {
-          if (!workspace.isDirectory()) continue
-
-          const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
-          if (!existsSync(workspaceJsonPath)) continue
-
-          try {
-            const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
-            if (workspaceData.folder) {
-              const path = decodeWorkspacePath(workspaceData.folder)
-              const name = basename(path)
-              processedWorkspaces++
-              spinner.text = `Scanning workspaces: ${processedWorkspaces}/${workspaces.length}`
-
-              // Check if this is the workspace we're looking for
-              // Either the basename matches exactly (case-insensitive), or the workspaceName is contained in the path (case-insensitive)
-              if (name.toLowerCase() !== workspaceName.toLowerCase() && !path.toLowerCase().includes(workspaceName.toLowerCase())) {
-                continue
-              }
-              matchingWorkspaces++
-              spinner.text = `Found matching workspace: ${name}`
-
-              const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
-              if (!existsSync(dbPath)) continue
-
-              const workspaceDb = new BetterSqlite3(dbPath, { readonly: true })
-              const result = workspaceDb.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
-                | undefined
-                | { value: string }
-
-              if (result) {
-                const parsed = JSON.parse(result.value) as unknown
-                if (
-                  typeof parsed === 'object' &&
-                  parsed !== null &&
-                  'allComposers' in parsed &&
-                  Array.isArray(parsed.allComposers)
-                ) {
-                  // Add all composerIds for this workspace to our set
-                  let composersAdded = 0
-                  for (const composer of parsed.allComposers) {
-                    if (typeof composer === 'object' && composer !== null && 'composerId' in composer) {
-                      composerIdsForWorkspace.add(composer.composerId as string)
-                      composersAdded++
-                    }
-                  }
-                  if (composersAdded > 0) {
-                    spinner.text = `Added ${composersAdded} composers from workspace: ${name}`
-                  }
-                }
-              }
-
-              workspaceDb.close()
-            }
-          } catch (error) {
-            console.error(`Error processing workspace ${workspace.name}:`, error)
-          }
-        }
-      }
-
-      spinner.text = `Found ${composerIdsForWorkspace.size} composerIds for workspace "${workspaceName}"`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // If we didn't find any composerIds for this workspace, return null
-      if (composerIdsForWorkspace.size === 0) {
-        spinner.info(`No composerIds found for workspace "${workspaceName}"`)
-        return null
-      }
-
-      spinner.text = 'Connected to database, querying conversations...'
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // Query for the 100 most recent conversations to increase chances of finding workspace-specific ones
-      const rows = db.prepare(
-        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 100"
-      ).all() as { key: string; value: string }[]
-
-      if (rows.length === 0) {
-        spinner.info('No conversations found')
-        return null
-      }
-
-      spinner.text = `Found ${rows.length} recent conversations, searching for workspace "${workspaceName}"...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // Process conversations one by one until we find a suitable one for the workspace
-      let processedCount = 0;
-      let matchedCount = 0;
-      for (const row of rows) {
-        try {
-          // Update spinner every 5 items to show progress without slowing down too much
-          if (processedCount % 5 === 0) {
-            spinner.text = `Checking conversation ${processedCount + 1}/${rows.length} for workspace "${workspaceName}"...`;
-            await new Promise<void>((r) => {
-              setTimeout(r, 10)
-            });
-          }
-          processedCount++;
-
-          const parsed = JSON.parse(row.value) as unknown
-
-          if (!isComposerData(parsed)) {
-            continue
-          }
-
-          // Skip if this composerId is not in our target workspace
-          if (!composerIdsForWorkspace.has(parsed.composerId)) {
-            continue
-          }
-
-          matchedCount++;
-          spinner.text = `Found ${matchedCount} matching conversations for workspace "${workspaceName}"`
-
-          // Skip conversations without messages
-          if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
-            continue
-          }
-
-          // Process any inline diffs in the conversation
-          for (const message of parsed.conversation) {
-            processInlineDiffs(message)
-          }
-
-          // Get workspace info for this conversation
-          const workspaceInfo = { name: workspaceName, path: '' }
-
-          // Get the full path if needed
-          if (composerIdsForWorkspace.has(parsed.composerId)) {
-            const fullWorkspaceInfo = findWorkspaceInfo(parsed.composerId)
-            if (fullWorkspaceInfo.path) {
-              workspaceInfo.path = fullWorkspaceInfo.path
-            }
-          }
-
-          const conversation: ConversationData = {
-            composerId: parsed.composerId,
-            context: parsed.context as ConversationData['context'],
-            conversation: parsed.conversation as ConversationData['conversation'],
-            createdAt: parsed.createdAt,
-            name: parsed.name,
-            richText: parsed.richText,
-            text: parsed.text,
-            unifiedMode: parsed.unifiedMode,
-            workspaceName: workspaceInfo.name,
-            workspacePath: workspaceInfo.path,
-          }
-
-          spinner.succeed(`Found conversation for workspace "${workspaceName}"`)
-          return conversation
-        } catch {
-          // Skip this conversation if there's an error processing it
-          continue
-        }
-      }
-
-      // If we get here, we didn't find any suitable conversations for the workspace
-      spinner.info(`No conversations found for workspace "${workspaceName}"`)
-      return null
-    } finally {
-      db.close()
-    }
-  } catch (error) {
-    spinner.fail('Error accessing database')
-    console.error('Error:', error)
-    return null
+export async function getLatestConversationForWorkspace(
+  workspaceName: string,
+  options?: {
+    sinceTimestamp?: number
+    untilTimestamp?: number
   }
+): Promise<ConversationData | null> {
+  const conversations = await getConversationsForWorkspace(workspaceName, options)
+  return conversations.length > 0 ? conversations[0] : null
 }
 
 /**
  * Retrieves the latest conversation with content.
+ * @param options Optional filtering parameters
  * @returns A promise that resolves to the latest conversation, or null if none found
  */
-export async function getLatestConversation(): Promise<ConversationData | null> {
+export async function getLatestConversation(options?: {
+  sinceTimestamp?: number
+  untilTimestamp?: number
+}): Promise<ConversationData | null> {
   const spinner = ora({
     color: 'cyan',
     spinner: 'dots',
@@ -867,10 +642,30 @@ export async function getLatestConversation(): Promise<ConversationData | null> 
         setTimeout(r, 50)
       })
 
-      // Query for the 20 most recent conversations
-      const rows = db.prepare(
-        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 20"
-      ).all() as { key: string; value: string }[]
+      // Date range filtering condition
+      let dateCondition = ''
+      const params: any[] = []
+
+      if (options?.sinceTimestamp !== undefined && options?.untilTimestamp !== undefined) {
+        // Both since and until provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) BETWEEN ? AND ?'
+        params.push(options.sinceTimestamp, options.untilTimestamp)
+      } else if (options?.sinceTimestamp !== undefined) {
+        // Only since provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) >= ?'
+        params.push(options.sinceTimestamp)
+      } else if (options?.untilTimestamp !== undefined) {
+        // Only until provided
+        dateCondition = 'AND CAST(json_extract(value, \'$.createdAt\') AS INTEGER) <= ?'
+        params.push(options.untilTimestamp)
+      }
+
+      // Query for the 20 most recent conversations with date filtering
+      const query = `SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ${dateCondition} ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 20`
+      const stmt = db.prepare(query)
+      const rows = params.length > 0
+        ? stmt.all(...params) as { key: string; value: string }[]
+        : stmt.all() as { key: string; value: string }[]
 
       if (rows.length === 0) {
         spinner.info('No conversations found')

@@ -7,15 +7,20 @@ import { basename, join } from 'node:path'
 
 import type { ConversationData } from './types.js'
 
-import { 
-  extractGlobalConversations, 
-  getConversationsForWorkspace, 
-  getLatestConversation, 
+import {
+  extractGlobalConversations,
+  getConversationsForWorkspace,
+  getLatestConversation,
   getLatestConversationForWorkspace,
   listWorkspaces
 } from './db/extract-conversations.js'
 import { getConversationsPath, getOutputDir } from './utils/config.js'
-import { formatConversation, generateConversationFilename } from './utils/formatting.js'
+import {
+  formatConversation,
+  generateConversationFilename,
+  parseDateToEndOfDayTimestamp,
+  parseDateToTimestamp
+} from './utils/formatting.js'
 
 export default class CursorHistory extends Command {
   static description = 'Manage and search Cursor conversation history'
@@ -27,6 +32,8 @@ Extract all conversations to markdown files`,
 Interactively search and view conversations`,
     `$ chi --select
 If current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard`,
+    `$ chi --since 2023-06-01 --until 2023-07-01
+Export the latest conversation within the specified date range`,
   ]
   static flags = {
     extract: Flags.boolean({
@@ -35,15 +42,23 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
       exclusive: ['search', 'select'],
     }),
     help: Flags.help({ char: 'h', description: 'Show CLI help' }),
+    search: Flags.boolean({
+      char: 's',
+      description: 'Interactively search and view conversations',
+      exclusive: ['extract', 'select'],
+    }),
     select: Flags.boolean({
       char: 'l',
       description: 'If current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard',
       exclusive: ['extract', 'search'],
     }),
-    search: Flags.boolean({
-      char: 's',
-      description: 'Interactively search and view conversations',
-      exclusive: ['extract', 'select'],
+    since: Flags.string({
+      dependsOn: [],
+      description: 'Filter conversations created on or after the specified date (YYYY-MM-DD)',
+    }),
+    until: Flags.string({
+      dependsOn: [],
+      description: 'Filter conversations created on or before the specified date (YYYY-MM-DD)',
     }),
     version: Flags.boolean({
       char: 'v',
@@ -60,8 +75,38 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
       return
     }
 
+    // Parse date range flags if provided
+    let sinceTimestamp: number | undefined
+    let untilTimestamp: number | undefined
+
+    if (flags.since) {
+      const timestamp = parseDateToTimestamp(flags.since)
+      if (timestamp === null) {
+        this.error(`Invalid date format for --since: "${flags.since}". Please use YYYY-MM-DD format.`)
+        return
+      }
+      sinceTimestamp = timestamp
+
+      this.log(`Filtering conversations since: ${new Date(sinceTimestamp).toLocaleDateString()}`)
+    }
+
+    if (flags.until) {
+      const timestamp = parseDateToEndOfDayTimestamp(flags.until)
+      if (timestamp === null) {
+        this.error(`Invalid date format for --until: "${flags.until}". Please use YYYY-MM-DD format.`)
+        return
+      }
+      untilTimestamp = timestamp
+
+      this.log(`Filtering conversations until: ${new Date(untilTimestamp).toLocaleDateString()}`)
+    }
+
+    const dateOptions = { sinceTimestamp, untilTimestamp }
+
     if (flags.extract || flags.search) {
-      this.conversations = await extractGlobalConversations()
+      this.conversations = await extractGlobalConversations({
+        ...dateOptions
+      })
 
       if (!this.conversations || this.conversations.length === 0) {
         this.log('No conversations found.')
@@ -75,7 +120,7 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
       }
     } else if (flags.select) {
       // Select flag: select workspace, list conversations, select one, copy to clipboard
-      await this.selectWorkspaceAndConversation()
+      await this.selectWorkspaceAndConversation(dateOptions)
     } else {
       // Default behavior: get latest conversation for current workspace or global latest
 
@@ -84,7 +129,10 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
       this.log(`Current directory: ${currentDirName}`)
 
       // Try to find a conversation for the current workspace
-      const workspaceConversation = await getLatestConversationForWorkspace(currentDirName)
+      const workspaceConversation = await getLatestConversationForWorkspace(
+        currentDirName,
+        dateOptions
+      )
 
       if (workspaceConversation) {
         this.log(`Found conversation for workspace: ${currentDirName}`)
@@ -92,7 +140,7 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
       } else {
         // Fall back to global latest conversation
         this.log('No workspace-specific conversation found, using latest global conversation')
-        const latestConversation = await getLatestConversation()
+        const latestConversation = await getLatestConversation(dateOptions)
         if (!latestConversation) {
           this.log('No conversations found.')
           return
@@ -110,7 +158,7 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
    * If the current directory name matches a workspace name, it will automatically
    * filter the list to only show conversations from that workspace.
    */
-  private async selectWorkspaceAndConversation(): Promise<void> {
+  private async selectWorkspaceAndConversation(dateOptions: { sinceTimestamp?: number; untilTimestamp?: number }): Promise<void> {
     // Get list of workspaces
     const workspaces = listWorkspaces()
 
@@ -127,7 +175,7 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
 
     // Check if current directory matches a workspace
     // Either the workspace name matches exactly (case-insensitive), or the currentDirName is contained in the workspace path (case-insensitive)
-    const matchingWorkspace = workspaces.find(ws => 
+    const matchingWorkspace = workspaces.find(ws =>
       ws.name.toLowerCase() === currentDirName.toLowerCase() || ws.path.toLowerCase().includes(currentDirName.toLowerCase())
     )
 
@@ -166,7 +214,7 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
     // Otherwise, use the selected workspace's name
     const workspaceNameToUse = matchingWorkspace ? currentDirName : selectedWorkspace.name
     this.log(`Using workspace name: ${workspaceNameToUse} for conversation lookup`)
-    const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse)
+    const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse, dateOptions)
 
     if (workspaceConversations.length === 0) {
       this.log(`No conversations found for workspace: ${selectedWorkspace.name}`)
@@ -181,7 +229,7 @@ If current directory matches a workspace, list its conversations. Otherwise, sel
       source: async (term) => {
         const termLower = term?.toLowerCase() || ''
         return workspaceConversations
-          .filter(conv => !term || 
+          .filter(conv => !term ||
             (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
             (conv.text?.toLowerCase() || '').includes(termLower)
           )
