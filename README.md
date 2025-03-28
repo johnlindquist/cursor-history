@@ -58,20 +58,98 @@ USAGE
 # Commands
 <!-- commands -->
 * [`chi`](#chi)
+* [`chi --extract`](#chi--extract)
+* [`chi --search`](#chi--search)
+* [`chi --select`](#chi--select)
+* [`chi --manage`](#chi--manage)
 
 ## `chi`
 
-Update installed plugins.
+Extract the latest conversation for the current workspace (or global latest if none found).
 
 ```
 USAGE
-  $ chi  [-h] [-v]
+  $ chi [-h] [-v]
 
 FLAGS
   -h, --help     Show CLI help.
-  -v, --verbose
+  -v, --version  Show CLI version.
 
 DESCRIPTION
-  Update installed plugins.
+  Extract the latest conversation for the current workspace (or global latest if none found).
+```
+
+## `chi --extract`
+
+Extract all conversations to markdown files.
+
+```
+USAGE
+  $ chi --extract [-h]
+
+FLAGS
+  -e, --extract  Extract all conversations to markdown files
+  -h, --help     Show CLI help.
+
+DESCRIPTION
+  Extract all conversations to markdown files organized by timestamp.
+```
+
+## `chi --search`
+
+Interactively search and view conversations.
+
+```
+USAGE
+  $ chi --search [-h]
+
+FLAGS
+  -s, --search   Interactively search and view conversations
+  -h, --help     Show CLI help.
+
+DESCRIPTION
+  Interactively search through conversation history and view/export selected conversations.
+```
+
+## `chi --select`
+
+Select a workspace, list its conversations, and copy selected conversation to clipboard.
+
+```
+USAGE
+  $ chi --select [-h]
+
+FLAGS
+  -l, --select   Select a workspace and conversation
+  -h, --help     Show CLI help.
+
+DESCRIPTION
+  If current directory matches a workspace, list its conversations.
+  Otherwise, select a workspace, list its conversations, and copy one to clipboard.
+```
+
+## `chi --manage`
+
+Manage extracted conversation files by pruning or archiving old files.
+
+```
+USAGE
+  $ chi --manage --older-than DURATION [--archive] [-h]
+
+FLAGS
+  -m, --manage           Manage extracted conversation files
+  --older-than DURATION  Remove files older than specified duration (e.g., 30d for 30 days, 2w for 2 weeks, 1m for 1 month)
+  --archive              Archive old conversations instead of deleting them
+  -h, --help             Show CLI help.
+
+DESCRIPTION
+  Manage extracted conversation files by removing or archiving files older than a specified duration.
+  
+  Duration format examples:
+  - 30d: 30 days
+  - 2w: 2 weeks
+  - 1m: 1 month (approximately 30 days)
+  
+  When using --archive, files are moved to an 'archive' subdirectory instead of being deleted.
 ```
 <!-- commandsstop -->
