@@ -1,4 +1,4 @@
-import type {ConversationData, FileChange, Message} from '../types.js'
+import type { ConversationData, FileChange, Message } from '../types.js'
 
 /**
  * Formats a numeric timestamp into an ISO string.
@@ -15,6 +15,52 @@ export function formatTimestamp(timestamp: number): null | string {
     }
 
     return new Date(timestamp).toISOString()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parses a date string in YYYY-MM-DD format and returns a timestamp in milliseconds.
+ * If the date string is invalid, returns null.
+ */
+export function parseDateToTimestamp(dateString: string): null | number {
+  try {
+    // Check if the date string matches YYYY-MM-DD format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+      return null
+    }
+
+    // Parse the date string
+    const date = new Date(dateString)
+
+    // Set the time to midnight (start of day)
+    date.setHours(0, 0, 0, 0)
+
+    // Validate that the parsed date is valid
+    if (Number.isNaN(date.getTime())) {
+      return null
+    }
+
+    return date.getTime()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parses a date string in YYYY-MM-DD format and returns a timestamp for the end of that day.
+ * If the date string is invalid, returns null.
+ */
+export function parseDateToEndOfDayTimestamp(dateString: string): null | number {
+  try {
+    const startOfDay = parseDateToTimestamp(dateString)
+    if (startOfDay === null) {
+      return null
+    }
+
+    // Add 23:59:59.999 to get end of day
+    return startOfDay + 24 * 60 * 60 * 1000 - 1
   } catch {
     return null
   }
@@ -40,14 +86,14 @@ export function formatMessage(message: Message): null | string {
     (message.type === '1' || message.type === 1
       ? 'User'
       : message.type === '2' || message.type === 2
-      ? 'Assistant'
-      : 'Unknown')
+        ? 'Assistant'
+        : 'Unknown')
 
   let output = `### ${role}\n\n`
 
   // Add timing information if available
   if (message.timingInfo) {
-    const {clientEndTime, clientStartTime} = message.timingInfo
+    const { clientEndTime, clientStartTime } = message.timingInfo
     if (clientStartTime && clientEndTime) {
       const formattedStart = new Date(clientStartTime).toLocaleString()
       const formattedEnd = new Date(clientEndTime).toLocaleString()
