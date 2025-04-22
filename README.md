@@ -1,155 +1,120 @@
 cursor-history
 =================
 
-A new CLI generated with oclif
+A fast CLI for exporting, searching and pruning [Cursor](https://cursor.sh) conversation history, built with TypeScript + oclif.
 
+---
 
-[![oclif](https://img.shields.io/badge/cli-oclif-brightgreen.svg)](https://oclif.io)
-[![Version](https://img.shields.io/npm/v/cursor-history.svg)](https://npmjs.org/package/cursor-history)
-[![Downloads/week](https://img.shields.io/npm/dw/cursor-history.svg)](https://npmjs.org/package/cursor-history)
+## Installation — TL;DR
 
+```bash
+# with npm (uses pre‑built binaries automatically)
+npm install -g @johnlindquist/cursor-history
 
-<!-- toc -->
-* [Installation](#installation)
-* [Usage](#usage)
-* [Commands](#commands)
-<!-- tocstop -->
-
-# Installation
-
-```sh-session
-$ pnpm add -g @johnlindquist/cursor-history
+# with pnpm ≥ 10 (read the next section!)
+PNPM_ENABLE_PREBUILDS=true pnpm add -g @johnlindquist/cursor-history
 ```
 
-## Troubleshooting Installation
+> **Why two commands?** `cursor‑history` depends on **better‑sqlite3**, a native add‑on. npm will download a ready‑made binary for your platform; pnpm *won't* unless you flip an opt‑in flag. Details below.  
+> When the binary is missing you'll get the famous `Could not locate the bindings file` stack‑trace at runtime.
 
-If you encounter issues with native module builds (particularly with better-sqlite3), try the following:
+---
 
-1. Ensure node-gyp is installed globally:
-```sh-session
-$ pnpm install -g node-gyp
+## Basic usage
+
+```bash
+# Export the latest conversation to a Markdown file + clipboard
+chi
+
+# Extract *all* conversations to ./conversations/<timestamp>/*
+chi --extract
+
+# Fuzzy‑search by title and copy the chosen conversation to clipboard
+chi --search
+
+# Manage old exports (delete older than 30 d)
+chi --manage --older-than 30d
 ```
 
-2. Install with prebuilds enabled:
-```sh-session
-$ PNPM_ENABLE_PREBUILDS=true pnpm add -g @johnlindquist/cursor-history
-```
+See `chi --help` for the full command list.
 
-3. If still having issues, try rebuilding better-sqlite3:
-```sh-session
-$ cd $(pnpm root -g)/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
-$ pnpm rebuild
-```
+---
 
-# Usage
-<!-- usage -->
-```sh-session
-$ npm install -g @johnlindquist/cursor-history
-$ chi COMMAND
-running command...
-$ chi (--version)
-@johnlindquist/cursor-history/0.0.13 linux-x64 node-v20.18.2
-$ chi --help [COMMAND]
-USAGE
-  $ chi COMMAND
-...
-```
-<!-- usagestop -->
-# Commands
-<!-- commands -->
-* [`chi`](#chi)
-* [`chi --extract`](#chi--extract)
-* [`chi --search`](#chi--search)
-* [`chi --select`](#chi--select)
-* [`chi --manage`](#chi--manage)
+## Troubleshooting checklist
 
-## `chi`
+1. `node -p "process.versions.modules"` returns **115** on Node 20; match that to the folder name in `better-sqlite3/lib/binding`. ([github.com](https://github.com/JoshuaWise/better-sqlite3/releases?utm_source=chatgpt.com))  
+2. Make sure you're *actually* running the pnpm‑installed binary: `which chi`.  
+3. Delete stale global installs (`pnpm uninstall -g`, `npm uninstall -g`) before switching package managers.
 
-Extract the latest conversation for the current workspace (or global latest if none found).
+---
 
-```
-USAGE
-  $ chi [-h] [-v]
+## Using pnpm with native modules
 
-FLAGS
-  -h, --help     Show CLI help.
-  -v, --version  Show CLI version.
+### What's happening under the hood?
 
-DESCRIPTION
-  Extract the latest conversation for the current workspace (or global latest if none found).
-```
+| Step | npm | pnpm ≤ 10 default |
+|------|-----|-------------------|
+| Install `better‑sqlite3` | Downloads **pre‑built** `better_sqlite3.node` that matches your Node ABI (`node‑v115‑darwin‑arm64`, etc.) | Skips the prebuild and **blocks the post‑install compile script** unless the package is in the allow‑list |
+| Runtime | `require('better-sqlite3')` finds the binary and works | Throws *Could not locate the bindings file* |
 
-## `chi --extract`
+The pnpm behaviour is intentional: it prevents unreviewed packages from running arbitrary build scripts on your machine. You have three ways to opt‑in:
 
-Extract all conversations to markdown files.
+1. **Turn on the prebuild switch** (the quickest fix) 🟢
 
-```
-USAGE
-  $ chi --extract [-h]
+   ```bash
+   PNPM_ENABLE_PREBUILDS=true pnpm add -g @johnlindquist/cursor-history
+   ```
 
-FLAGS
-  -e, --extract  Extract all conversations to markdown files
-  -h, --help     Show CLI help.
+   The env‑var (or the matching `.npmrc` key `enable-prebuilt-binary=true`) tells pnpm to download official prebuilt binaries for *all* packages that ship them, including `better‑sqlite3`. No compilation needed. ([github.com](https://github.com/WiseLibs/better-sqlite3/issues/782?utm_source=chatgpt.com), [github.com](https://github.com/pnpm/pnpm/issues/2135?utm_source=chatgpt.com))
 
-DESCRIPTION
-  Extract all conversations to markdown files organized by timestamp.
-```
+2. **Manually approve the build scripts** 🟡
 
-## `chi --search`
+   If you forgot the flag and saw
 
-Interactively search and view conversations.
+   ```
+   Ignored build scripts: better-sqlite3, sqlite3.
+   Run "pnpm approve-builds -g" to pick which dependencies should be allowed to run scripts.
+   ```
 
-```
-USAGE
-  $ chi --search [-h]
+   just do it:
 
-FLAGS
-  -s, --search   Interactively search and view conversations
-  -h, --help     Show CLI help.
+   ```bash
+   pnpm approve-builds -g   # interactive prompt ‑ pick better‑sqlite3 & sqlite3
+   ```
 
-DESCRIPTION
-  Interactively search through conversation history and view/export selected conversations.
-```
+   This whitelists the packages globally and re‑runs their `install`/`postinstall` scripts, compiling the native addon from source. Docs: `pnpm approve-builds` was added in v10.1 and gained the `‑g` flag in v10.4. ([pnpm.io](https://pnpm.io/cli/approve-builds), [github.com](https://github.com/pnpm/pnpm/issues/9045?utm_source=chatgpt.com))
 
-## `chi --select`
+3. **Force a rebuild** 🔧
 
-Select a workspace, list its conversations, and copy selected conversation to clipboard.
+   ```bash
+   # prerequisite tool‑chain once per machine
+   xcode-select --install      # macOS — installs clang & make
+   pnpm install -g node-gyp    # wrapper around gyp
 
-```
-USAGE
-  $ chi --select [-h]
+   # then, inside the global store path
+   cd "$(pnpm root -g)/.pnpm/better-sqlite3@*/node_modules/better-sqlite3"
+   pnpm rebuild                # runs node-gyp from source
+   ```
 
-FLAGS
-  -l, --select   Select a workspace and conversation
-  -h, --help     Show CLI help.
+   Use this when you *need* a from‑source build (e.g. bleeding‑edge Node version without prebuilds). ([github.com](https://github.com/pnpm/pnpm/issues/8228?utm_source=chatgpt.com), [github.com](https://github.com/WiseLibs/better-sqlite3/issues/1027?utm_source=chatgpt.com))
 
-DESCRIPTION
-  If current directory matches a workspace, list its conversations.
-  Otherwise, select a workspace, list its conversations, and copy one to clipboard.
-```
+### FAQ
 
-## `chi --manage`
+* **Do I have to do this every time?**  
+  No. Set the flag once in your user npmrc:  
+  `pnpm config set enable-prebuilt-binary true` or export the env variable from your shell profile.
+* **What if I see `arm64e` vs `arm64` errors?**  
+  You're probably mixing Rosetta and native Node builds. Re‑install Node with the same architecture as your terminal session. ([github.com](https://github.com/WiseLibs/better-sqlite3/issues/861?utm_source=chatgpt.com))
+* **Is there a prebuild‑only fork?**  
+  Yes, `better-sqlite3-with-prebuilds` publishes the binary directly in the tarball, avoiding the download step altogether. Feel free to swap it in your own projects. cite turn1search9
 
-Manage extracted conversation files by pruning or archiving old files.
+---
 
-```
-USAGE
-  $ chi --manage --older-than DURATION [--archive] [-h]
+## Contributing
 
-FLAGS
-  -m, --manage           Manage extracted conversation files
-  --older-than DURATION  Remove files older than specified duration (e.g., 30d for 30 days, 2w for 2 weeks, 1m for 1 month)
-  --archive              Archive old conversations instead of deleting them
-  -h, --help             Show CLI help.
+PRs and issues are welcome! If you have ideas for smoothing out the native‑module install story (post‑install hook, binary‑safe fork, Docker build, etc.) open a discussion.
 
-DESCRIPTION
-  Manage extracted conversation files by removing or archiving files older than a specified duration.
-  
-  Duration format examples:
-  - 30d: 30 days
-  - 2w: 2 weeks
-  - 1m: 1 month (approximately 30 days)
-  
-  When using --archive, files are moved to an 'archive' subdirectory instead of being deleted.
-```
-<!-- commandsstop -->
+---
+
+© 2025 John Lindquist — MIT
+
