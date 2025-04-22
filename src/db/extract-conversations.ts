@@ -455,14 +455,30 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
 
   try {
     db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
-    const query = db.prepare(`
-      SELECT key, value 
-      FROM cursorDiskKV 
-      WHERE key LIKE 'composerData:%' 
-      ORDER BY key DESC 
-      ${limit ? 'LIMIT @limit' : ''}
-    `);
-    const rows = query.all(limit ? { limit } : undefined) as { key: string; value: Buffer }[];
+
+    let rows: { key: string; value: Buffer }[];
+
+    // Prepare and execute different queries based on limit
+    if (limit) {
+      const sql = `
+          SELECT key, value 
+          FROM cursorDiskKV 
+          WHERE key LIKE 'composerData:%' 
+          ORDER BY key DESC 
+          LIMIT @limit
+        `;
+      const query = db.prepare(sql);
+      rows = query.all({ limit }) as { key: string; value: Buffer }[];
+    } else {
+      const sql = `
+          SELECT key, value 
+          FROM cursorDiskKV 
+          WHERE key LIKE 'composerData:%' 
+          ORDER BY key DESC
+        `;
+      const query = db.prepare(sql);
+      rows = query.all() as { key: string; value: Buffer }[]; // No parameters needed
+    }
 
     spinner.text = `Processing ${rows.length} raw conversation entries...`
 

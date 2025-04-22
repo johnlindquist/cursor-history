@@ -200,8 +200,15 @@ export default class CursorHistory extends Command {
 
   private getDisplayName(conversation: ConversationData): string {
     const date = new Date(conversation.createdAt).toLocaleString()
-    const preview = conversation.conversation[0]?.text?.slice(0, 100) || 'No preview available'
-    return `${date} - ${preview}...`
+    // Prioritize conversation name, fallback to first message text preview
+    const title = conversation.name && conversation.name !== 'Unnamed Conversation'
+      ? conversation.name
+      : conversation.conversation[0]?.text?.slice(0, 100) || 'No preview available'
+    // Add workspace name if available and different from title
+    const workspaceSuffix = conversation.workspaceName && conversation.workspaceName !== title
+      ? ` (Workspace: ${conversation.workspaceName})`
+      : ''
+    return `${date} - ${title}${workspaceSuffix}`;
   }
 
   private async manageConversationFiles(olderThan: string | undefined, archive: boolean): Promise<void> {
@@ -318,13 +325,18 @@ export default class CursorHistory extends Command {
 
     const termLower = term.toLowerCase()
     return this.conversations
+      // Filter based on conversation name (title)
       .filter((conv) => {
-        const text = conv.conversation[0]?.text?.toLowerCase() || ''
-        return text.includes(termLower)
+        const nameMatch = conv.name?.toLowerCase().includes(termLower);
+        // Optionally, could also search workspace name or first message as fallback?
+        // const firstMessageMatch = conv.conversation[0]?.text?.toLowerCase().includes(termLower);
+        return nameMatch; // For now, only search name
       })
       .map((conv) => ({
-        description: new Date(conv.createdAt).toLocaleString(),
+        // Use the potentially updated display name function
         name: this.getDisplayName(conv),
+        // Keep description as date for sorting/info
+        description: `Created: ${new Date(conv.createdAt).toLocaleString()}${conv.workspaceName ? ' | Workspace: ' + conv.workspaceName : ''}`,
         value: conv,
       }))
   }
