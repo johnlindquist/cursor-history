@@ -1,14 +1,14 @@
 cursor-history
 =================
 
-A fast CLI for exporting, searching and pruning [Cursor](https://cursor.sh) conversation history, built with TypeScript + oclif.
+A fast CLI for exporting and searching [Cursor](https://cursor.sh) conversation history, built with TypeScript + oclif.
 
 ---
 
 ## Installation — TL;DR
 
 ```bash
-# with npm (uses pre‑built binaries automatically)
+# with npm
 npm install -g @johnlindquist/cursor-history
 
 # with pnpm ≥ 10 (read the next section!)
