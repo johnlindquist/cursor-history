@@ -48,7 +48,7 @@ export interface Message {
         endLineNumberExclusive: number
         startLineNumber: number
       }
-      uri: {path: string}
+      uri: { path: string }
     }>
   }
   codeBlocks?: Array<{
@@ -118,7 +118,6 @@ export interface ConversationData {
   conversation: Message[]
   createdAt: number
   name?: string
-  richText?: boolean
   text?: string
   unifiedMode?: string
   workspaceName?: string
@@ -209,3 +208,85 @@ export interface ConversationAnalysis {
   mode: string
   name: string
 }
+
+// --- New Types for Raw Database Structure --- 
+
+export interface RichTextContentNode {
+  text?: string
+  type: string
+  // Other potential fields like marks, attrs might be needed
+}
+
+export interface RichTextBlockNode {
+  attrs?: { // Add optional attrs field
+    [key: string]: any // Allow other potential attributes
+    params?: string // Specifically for code block language based on investigation
+  }
+  children?: RichTextNode[] // For nested blocks (e.g., paragraphs inside list items)
+  content?: RichTextContentNode[] // For text/marks within a block
+  type: string // e.g., 'paragraph', 'code'
+  // Other potential fields like marks might be needed
+}
+
+// Base type combining potential structures (adjust based on real data if needed)
+export type RichTextNode = RichTextBlockNode | RichTextContentNode
+
+export interface RichTextRoot {
+  root: {
+    children: RichTextNode[]
+    // Other potential root fields
+  }
+}
+
+// Represents an item directly in the `conversation` array from the DB
+export interface ConversationItem {
+  _v?: number
+  allThinkingBlocks?: unknown[]
+  attachedFoldersListDirResults?: unknown[]
+  attachedHumanChanges?: unknown[]
+  bubbleId: string
+  cachedConversationSummary?: unknown
+  capabilitiesRan?: unknown[]
+  capabilityStatuses?: unknown[]
+  capabilityType?: string
+  checkpointId?: string
+  codeBlocks?: Partial<CodeBlock>[] // Optional, sometimes present on type 2 items
+  context?: unknown
+  contextPieces?: unknown[]
+  cursorRules?: unknown[]
+  deletedFiles?: unknown[]
+  diffHistories?: unknown[]
+  diffsSinceLastApply?: unknown[]
+  docsReferences?: unknown[]
+  editTrailContexts?: unknown[]
+  existedPreviousTerminalCommand?: boolean
+  existedSubsequentTerminalCommand?: boolean
+  fileDiffTrajectories?: unknown[]
+  fileLinks?: unknown[]
+  humanChanges?: unknown[]
+  intermediateChunks?: unknown[]
+  isAgentic?: boolean
+  isCapabilityIteration?: boolean
+  isChat?: boolean
+  isThought?: boolean
+  multiFileLinterErrors?: unknown[]
+  recentLocationsHistory?: unknown[]
+  // Add other observed optional fields if necessary for specific logic later
+  relevantFiles?: unknown[]
+  richText?: string // Stringified JSON (likely RichTextRoot structure)
+  serverBubbleId?: string
+  summarizedComposers?: unknown[]
+  supportedTools?: unknown[]
+  symbolLinks?: unknown[]
+  text?: string // Can be empty, sometimes contains assistant message
+  timingInfo?: any // Optional, sometimes present on type 2 items
+  tokenCount?: number
+  tokenCountUpUntilHere?: number
+  tokenDetailsUpUntilHere?: unknown
+  type: number // 1 for user, 2 for assistant/system
+  unifiedMode?: string
+  usageUuid?: string
+  webReferences?: unknown[]
+}
+
+// --- End New Types --- 

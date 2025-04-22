@@ -17,6 +17,11 @@ import {
 import { getConversationsPath, getOutputDir } from './utils/config.js'
 import { formatConversation, generateConversationFilename } from './utils/formatting.js'
 
+const EXAMPLE_EXTRACT = `$ chi --extract\nExtract all conversations to markdown files`;
+const EXAMPLE_SEARCH = `$ chi --search\nInteractively search and view conversations`;
+const EXAMPLE_SELECT = `$ chi --select\nIf current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard`;
+const EXAMPLE_MANAGE = `$ chi --manage --older-than 30d\nRemove conversation files older than 30 days`;
+
 /**
  * Parse a duration string into milliseconds
  * @param duration Duration string like "30d", "2w", "1m"
@@ -52,14 +57,10 @@ export default class CursorHistory extends Command {
   static description = 'Manage and search Cursor conversation history'
   static enableJsonFlag = false // Disable JSON flag since we don't use it
   static examples = [
-    `$ chi --extract
-Extract all conversations to markdown files`,
-    `$ chi --search
-Interactively search and view conversations`,
-    `$ chi --select
-If current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard`,
-    `$ chi --manage --older-than 30d
-Remove conversation files older than 30 days`,
+    EXAMPLE_EXTRACT,
+    EXAMPLE_SEARCH,
+    EXAMPLE_SELECT,
+    EXAMPLE_MANAGE,
   ]
   static flags = {
     archive: Flags.boolean({
@@ -352,8 +353,8 @@ Remove conversation files older than 30 days`,
 
     // Check if current directory matches a workspace
     // Either the workspace name matches exactly (case-insensitive), or the currentDirName is contained in the workspace path (case-insensitive)
-    const matchingWorkspace = workspaces.find(ws =>
-      ws.name.toLowerCase() === currentDirName.toLowerCase() || ws.path.toLowerCase().includes(currentDirName.toLowerCase())
+    const matchingWorkspace = workspaces.find((ws: { id: string; name: string; path: string; }) =>
+      ws.name.toLowerCase() === currentDirName.toLowerCase()
     )
 
     let selectedWorkspace: undefined | { id: string; name: string; path: string; }
@@ -369,8 +370,10 @@ Remove conversation files older than 30 days`,
         async source(term) {
           const termLower = term?.toLowerCase() || ''
           return workspaces
-            .filter(ws => !term || ws.name.toLowerCase().includes(termLower))
-            .map(ws => ({
+            .filter((ws: { id: string; name: string; path: string; }) =>
+              !term || ws.name.toLowerCase().includes(termLower)
+            )
+            .map((ws: { id: string; name: string; path: string; }) => ({
               description: ws.path,
               name: ws.name,
               value: ws,

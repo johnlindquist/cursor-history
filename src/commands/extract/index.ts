@@ -1,10 +1,10 @@
-import {Command} from '@oclif/core'
-import {writeFileSync} from 'node:fs'
-import {join} from 'node:path'
+import { Command } from '@oclif/core'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
-import {extractGlobalConversations} from '../../db/extract-conversations.js'
-import {getConfigPath, getConversationsPath, getOutputDir} from '../../utils/config.js'
-import {formatConversation, generateConversationFilename, hasAssistantMessages} from '../../utils/formatting.js'
+import { extractGlobalConversations } from '../../db/extract-conversations.js'
+import { getConversationsPath, getOutputDir } from '../../utils/config.js'
+import { formatConversation, generateConversationFilename, hasAssistantMessages } from '../../utils/formatting.js'
 
 export default class Extract extends Command {
   static description = 'Extract conversations from Cursor global storage'
@@ -17,7 +17,9 @@ Extracts all conversations from Cursor's global storage database and saves them 
   async run(): Promise<void> {
     this.log('Starting conversation extraction...')
     const allConversations = await extractGlobalConversations()
-    const conversations = allConversations.filter(hasAssistantMessages)
+    const conversations = allConversations.filter(
+      (conv) => hasAssistantMessages(conv)
+    )
     const skipped = allConversations.length - conversations.length
 
     if (conversations.length > 0) {

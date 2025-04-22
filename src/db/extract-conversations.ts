@@ -4,8 +4,19 @@ import { platform } from 'node:os'
 import { basename, join } from 'node:path'
 import ora from 'ora'
 
-import type { ConversationData } from '../types.js'
+import type {
+  CodeBlock,
+  ConversationData,
+  ConversationItem,
+  Message,
+  RichTextBlockNode,
+  RichTextContentNode,
+  RichTextNode,
+  RichTextRoot,
+} from '../types.js'
 
+// Comment out potentially incompatible function for now
+/*
 interface CodeBlock {
   [key: string]: unknown
   content?: string
@@ -17,7 +28,6 @@ interface CodeBlock {
     path: string
   }
 }
-
 interface DiffChange {
   modified: string[]
   original: {
@@ -25,87 +35,99 @@ interface DiffChange {
     startLineNumber: number
   }
 }
-
 function processInlineDiffs(message: any): void {
-  // Skip if no checkpoint or diffs
-  if (!message.afterCheckpoint?.activeInlineDiffs?.length) return
+  // ... implementation ...
+}
+*/
 
-  // Process each code block
-  message.codeBlocks = message.codeBlocks || []
+// --- Helper Functions for Rich Text Extraction --- 
 
-  for (const diff of message.afterCheckpoint.activeInlineDiffs) {
-    const codeBlock = message.codeBlocks.find((block: any) => block.uri?.path === diff.uri?.path)
+/**
+ * Recursively extracts text content from a ProseMirror-like node structure.
+ */
+function extractTextFromNodes(nodes: RichTextNode[] | undefined): string {
+  if (!nodes) return ''
+  let text = ''
+  for (const node of nodes) {
+    if (!node) continue;
 
-    if (diff.newTextDiffWrtV0) {
-      const changes = diff.newTextDiffWrtV0.flatMap((change: DiffChange) => {
-        if (change.original && change.modified?.length) {
-          return [
-            `// Lines ${change.original.startLineNumber}-${change.original.endLineNumberExclusive}:`,
-            '// Original code removed',
-            '// New code:',
-            ...change.modified,
-            '', // Add spacing between changes
-          ]
-        }
+    if (node.type === 'text') {
+      // Cast to access text property
+      text += (node as RichTextContentNode).text ?? ''
+    } else if (['blockquote', 'heading', 'listItem', 'paragraph'].includes(node.type)) {
+      // Cast to access content/children
+      const blockNode = node as RichTextBlockNode;
+      if (Array.isArray(blockNode.content)) {
+        text += extractTextFromNodes(blockNode.content)
+      }
 
-        return []
-      })
+      if (Array.isArray(blockNode.children)) {
+        text += extractTextFromNodes(blockNode.children)
+      }
+    } else {
+      // Handle other potential block types or recurse
+      const blockNode = node as RichTextBlockNode; // Assume block-like for recursion
+      if (Array.isArray(blockNode.content)) {
+        text += extractTextFromNodes(blockNode.content)
+      }
 
-      const content = changes.join('\n').trim()
-      const lastChange = diff.newTextDiffWrtV0.at(-1)
-      const firstChange = diff.newTextDiffWrtV0[0]
-
-      // Update existing block or create new one
-      if (codeBlock) {
-        codeBlock.content = content
-        codeBlock.language = codeBlock.uri.path.split('.').pop() || ''
-        // Preserve the line range if it exists
-        if (firstChange?.original) {
-          codeBlock.start = firstChange.original.startLineNumber
-          codeBlock.end = lastChange?.original.endLineNumberExclusive
-        }
-      } else {
-        const newBlock: CodeBlock = {
-          content,
-          language: diff.uri.path.split('.').pop() || '',
-          uri: diff.uri,
-        }
-
-        // Add line range if available
-        if (firstChange?.original) {
-          newBlock.start = firstChange.original.startLineNumber
-          newBlock.end = lastChange?.original.endLineNumberExclusive
-        }
-
-        message.codeBlocks.push(newBlock)
+      if (Array.isArray(blockNode.children)) {
+        text += extractTextFromNodes(blockNode.children)
       }
     }
   }
+
+  return text
 }
 
-// Type guard for composer data
-interface ComposerData {
+/**
+ * Extracts code blocks from a ProseMirror-like node structure.
+ */
+function extractCodeBlocksFromNodes(nodes: RichTextNode[] | undefined): Partial<CodeBlock>[] {
+  if (!nodes) return []
+  const codeBlocks: Partial<CodeBlock>[] = []
+  for (const node of nodes) {
+    if (!node) continue;
+
+    if (node.type === 'code') {
+      // Cast to access content/attrs
+      const codeBlockNode = node as RichTextBlockNode;
+      let codeContent = '';
+      if (Array.isArray(codeBlockNode.content)) {
+        codeContent = extractTextFromNodes(codeBlockNode.content)
+      }
+
+      let language = 'plaintext';
+      if (typeof codeBlockNode.attrs === 'object' && codeBlockNode.attrs !== null && typeof codeBlockNode.attrs.params === 'string') {
+        language = codeBlockNode.attrs.params;
+      }
+
+      codeBlocks.push({
+        code: codeContent,
+        language,
+      })
+    } else if (['blockquote', 'listItem'].includes(node.type)) { // Recurse for block types that might contain nested code
+      const blockNode = node as RichTextBlockNode;
+      if (Array.isArray(blockNode.children)) {
+        codeBlocks.push(...extractCodeBlocksFromNodes(blockNode.children))
+      }
+    } else if (Array.isArray((node as RichTextBlockNode).children)) { // General recursion for blocks with children
+      codeBlocks.push(...extractCodeBlocksFromNodes((node as RichTextBlockNode).children))
+    }
+  }
+
+  return codeBlocks
+}
+
+// --- Type guard for NEW raw ConversationData --- 
+interface RawConversationData {
   composerId: string
   context?: unknown
-  conversation: unknown[]
+  conversation: ConversationItem[] // Use new type
   createdAt: number
   name?: string
-  richText?: boolean
   text?: string
   unifiedMode?: string
-}
-
-function isComposerData(data: unknown): data is ComposerData {
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    'composerId' in data &&
-    typeof (data as ComposerData).composerId === 'string' &&
-    'conversation' in data &&
-    Array.isArray((data as ComposerData).conversation) &&
-    'createdAt' in data &&
-    typeof (data as ComposerData).createdAt === 'number'
-  )
 }
 
 function getCursorDbPath(): string {
@@ -170,17 +192,72 @@ function decodeWorkspacePath(uri: string): string {
   }
 }
 
+function findWorkspaceInfo(composerId: string): { name?: string; path?: string } {
+  const workspaceStoragePath = getWorkspaceStoragePath()
+  if (!existsSync(workspaceStoragePath)) return {}
+
+  const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
+
+  for (const workspace of workspaces) {
+    if (!workspace.isDirectory()) continue
+
+    const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
+    if (!existsSync(dbPath)) continue
+
+    let db: BetterSqlite3.Database | null = null;
+    try {
+      db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
+      const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
+        | undefined
+        | { value: string }
+
+      if (result?.value) {
+        const parsed = JSON.parse(result.value) as unknown
+        if (
+          typeof parsed === 'object' &&
+          parsed !== null &&
+          'allComposers' in parsed &&
+          Array.isArray(parsed.allComposers) &&
+          parsed.allComposers.some(
+            (c: unknown) => typeof c === 'object' && c !== null && 'composerId' in c && c.composerId === composerId,
+          )
+        ) {
+          const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
+          if (existsSync(workspaceJsonPath)) {
+            const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
+            if (workspaceData.folder) {
+              const path = decodeWorkspacePath(workspaceData.folder)
+              db.close() // Close DB before returning
+              return {
+                name: basename(path),
+                path,
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Error reading workspace DB ${dbPath}:`, error)
+    } finally {
+      db?.close()
+    }
+  }
+
+  return {}
+}
+
+// --- Utility Functions --- 
+// Ensure listWorkspaces is exported
 /**
  * Lists all available workspaces.
  * @returns An array of workspace objects with name and path properties
  */
-export function listWorkspaces(): Array<{ name: string; path: string; id: string }> {
+export function listWorkspaces(): Array<{ id: string; name: string; path: string; }> {
   const workspaceStoragePath = getWorkspaceStoragePath()
   if (!existsSync(workspaceStoragePath)) return []
 
-  // Look through each workspace directory
-  const workspaces = existsSync(workspaceStoragePath) ? readdirSync(workspaceStoragePath, { withFileTypes: true }) : []
-  const result: Array<{ name: string; path: string; id: string }> = []
+  const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
+  const result: Array<{ id: string; name: string; path: string; }> = []
 
   for (const workspace of workspaces) {
     if (!workspace.isDirectory()) continue
@@ -194,9 +271,9 @@ export function listWorkspaces(): Array<{ name: string; path: string; id: string
         const path = decodeWorkspacePath(workspaceData.folder)
         const name = basename(path)
         result.push({
+          id: workspace.name,
           name,
           path,
-          id: workspace.name,
         })
       }
     } catch (error) {
@@ -207,794 +284,303 @@ export function listWorkspaces(): Array<{ name: string; path: string; id: string
   return result
 }
 
-function findWorkspaceInfo(composerId: string): { name?: string; path?: string } {
+// --- NEW HELPER: Get Composer IDs for a Workspace --- 
+function getWorkspaceComposerIds(workspaceName: string): Set<string> {
+  const composerIds = new Set<string>()
   const workspaceStoragePath = getWorkspaceStoragePath()
-  if (!existsSync(workspaceStoragePath)) return {}
+  const nameLower = workspaceName.toLowerCase()
 
-  // Look through each workspace directory
-  const workspaces = existsSync(workspaceStoragePath) ? readdirSync(workspaceStoragePath, { withFileTypes: true }) : []
+  if (!existsSync(workspaceStoragePath)) return composerIds
+
+  const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
 
   for (const workspace of workspaces) {
     if (!workspace.isDirectory()) continue
 
+    const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
+    if (!existsSync(workspaceJsonPath)) continue
+
+    let workspacePath = '';
+    let currentWorkspaceName = '';
+    try {
+      const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
+      if (workspaceData.folder) {
+        workspacePath = decodeWorkspacePath(workspaceData.folder)
+        currentWorkspaceName = basename(workspacePath)
+      } else {
+        continue; // Skip if no folder info
+      }
+    } catch {
+      // console.error(`Error reading workspace JSON ${workspace.name}:`, error)
+      continue;
+    }
+
+    // Check if this workspace matches the target name (case-insensitive)
+    // Match if basename is the same OR if the full path contains the name
+    if (currentWorkspaceName.toLowerCase() !== nameLower && !workspacePath.toLowerCase().includes(nameLower)) {
+      continue;
+    }
+
+    // Found a matching workspace, now read its DB for composer IDs
     const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
     if (!existsSync(dbPath)) continue
 
+    let db: BetterSqlite3.Database | null = null;
     try {
-      const db = new BetterSqlite3(dbPath, { readonly: true })
-      const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
-        | undefined
-        | { value: string }
+      db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
+      const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as undefined | { value: string }
 
-      if (result) {
+      if (result?.value) {
         const parsed = JSON.parse(result.value) as unknown
         if (
           typeof parsed === 'object' &&
           parsed !== null &&
           'allComposers' in parsed &&
-          Array.isArray(parsed.allComposers) &&
-          parsed.allComposers.some(
-            (c: unknown) => typeof c === 'object' && c !== null && 'composerId' in c && c.composerId === composerId,
-          )
+          Array.isArray(parsed.allComposers)
         ) {
-          // Found the workspace containing this conversation
-          const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
-          if (existsSync(workspaceJsonPath)) {
-            const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
-            if (workspaceData.folder) {
-              const path = decodeWorkspacePath(workspaceData.folder)
-              return {
-                name: basename(path),
-                path,
-              }
+          for (const composer of parsed.allComposers) {
+            if (typeof composer === 'object' && composer !== null && 'composerId' in composer && typeof composer.composerId === 'string') {
+              composerIds.add(composer.composerId)
             }
           }
         }
       }
-
-      db.close()
-    } catch (error) {
-      console.error(`Error checking workspace ${workspace.name}:`, error)
-    }
-  }
-
-  return {}
-}
-
-/**
- * Extracts conversations from the global database and returns them.
- * @param limit Optional limit on number of conversations to return
- * @returns A promise that resolves to an array of conversations
- */
-export async function extractGlobalConversations(limit?: number): Promise<ConversationData[]> {
-  const spinner = ora({
-    color: 'cyan',
-    spinner: 'dots',
-    text: 'Determining database path...',
-  }).start()
-
-  let dbPath: string
-  try {
-    dbPath = getCursorDbPath()
-    spinner.text = 'Database path found, checking existence...'
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    if (!existsSync(dbPath)) {
-      spinner.fail(`Global database not found at: ${dbPath}`)
-      return []
-    }
-
-    spinner.text = `Opening database connection: ${dbPath}`
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    let db: BetterSqlite3.Database | null = null
-
-    try {
-      db = new BetterSqlite3(dbPath, { readonly: true })
-      spinner.text = 'Connected to database, querying conversations...'
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // If we only need one conversation, optimize the query
-      const query =
-        limit === 1
-          ? "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 1"
-          : "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'"
-
-      const rows = db.prepare(query).all() as {
-        key: string
-        value: string
-      }[]
-
-      spinner.text = `Found ${rows.length} potential conversations, beginning processing...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      const processedConversations: ConversationData[] = []
-      const batchSize = 10
-      const batches = []
-
-      for (let i = 0; i < rows.length; i += batchSize) {
-        batches.push(rows.slice(i, i + batchSize))
-      }
-
-      // Process all batches in parallel
-      await Promise.all(
-        batches.map(async (batch) => {
-          const batchResults = await Promise.all(
-            batch.map(async (row) => {
-              try {
-                const parsed = JSON.parse(row.value) as unknown
-                if (!isComposerData(parsed)) {
-                  console.error(`Invalid data structure in row ${row.key}`)
-                  return null
-                }
-
-                // Process any inline diffs in the conversation
-                if (Array.isArray(parsed.conversation)) {
-                  for (const message of parsed.conversation) {
-                    processInlineDiffs(message)
-                  }
-                }
-
-                // Get workspace info for this conversation
-                const workspaceInfo = findWorkspaceInfo(parsed.composerId)
-
-                return {
-                  composerId: parsed.composerId,
-                  context: parsed.context,
-                  conversation: parsed.conversation,
-                  createdAt: parsed.createdAt,
-                  name: parsed.name,
-                  richText: parsed.richText,
-                  text: parsed.text,
-                  unifiedMode: parsed.unifiedMode,
-                  workspaceName: workspaceInfo.name,
-                  workspacePath: workspaceInfo.path,
-                } as ConversationData
-              } catch (error) {
-                console.error(`Error processing row ${row.key}:`, error)
-                return null
-              }
-            }),
-          )
-
-          const validResults = batchResults.filter(
-            (result): result is ConversationData =>
-              result !== null &&
-              typeof result.composerId === 'string' &&
-              Array.isArray(result.conversation) &&
-              typeof result.createdAt === 'number',
-          )
-          processedConversations.push(...validResults)
-        }),
-      )
-
-      if (processedConversations.length > 0) {
-        // Sort by last message's timing instead of conversation creation time
-        const sorted = processedConversations.sort((a, b) => {
-          const aLastMessage = a.conversation.at(-1) as any
-          const bLastMessage = b.conversation.at(-1) as any
-
-          const aTime =
-            aLastMessage?.timingInfo?.clientEndTime || aLastMessage?.timingInfo?.clientSettleTime || a.createdAt
-          const bTime =
-            bLastMessage?.timingInfo?.clientEndTime || bLastMessage?.timingInfo?.clientSettleTime || b.createdAt
-
-          return bTime - aTime // Sort descending
-        })
-        spinner.succeed(`Found ${processedConversations.length} conversations with content`)
-        return limit ? sorted.slice(0, limit) : sorted
-      }
-
-      spinner.info('No conversations with content found')
-      return []
-    } catch (error) {
-      spinner.fail('Error processing database')
-      console.error('Error:', error)
-      return []
+    } catch {
+      // console.error(`Error reading workspace DB ${dbPath}:`, error)
     } finally {
       db?.close()
     }
-  } catch (error) {
-    spinner.fail('Failed to determine database path')
-    console.error('Error:', error)
+  }
+
+  return composerIds
+}
+
+// --- NEW HELPER: Process a single conversation entry --- 
+function processConversationEntry(rawData: RawConversationData): ConversationData | null {
+  const processedMessages: Message[] = []
+
+  for (const item of rawData.conversation) {
+    let role: 'assistant' | 'user' | null = null
+    if (item.type === 1) {
+      role = 'user'
+    } else if (item.type === 2) {
+      role = 'assistant'
+    } else {
+      continue // Skip unknown types
+    }
+
+    let extractedText = ''
+    let extractedCodeBlocks: Partial<CodeBlock>[] = []
+    let richTextData: null | RichTextRoot = null
+
+    // 1. Try parsing richText
+    if (typeof item.richText === 'string' && item.richText.trim().startsWith('{')) {
+      try {
+        richTextData = JSON.parse(item.richText) as RichTextRoot
+        if (richTextData?.root?.children) {
+          extractedText = extractTextFromNodes(richTextData.root.children)
+          extractedCodeBlocks = extractCodeBlocksFromNodes(richTextData.root.children)
+        }
+      } catch {
+        // Ignore parsing errors
+      }
+    }
+
+    // 2. Handle direct text/codeblocks
+    if (role === 'assistant') {
+      if (!extractedText && item.text && item.text.trim().length > 0) {
+        extractedText = item.text;
+      }
+
+      if (extractedCodeBlocks.length === 0 && Array.isArray(item.codeBlocks)) {
+        extractedCodeBlocks = item.codeBlocks.map(cb => ({ code: cb?.code ?? '', language: cb?.language ?? 'plaintext' })).filter(cb => cb.code);
+      }
+    }
+
+    if (role === 'user' && !extractedText && item.text && item.text.trim().length > 0) {
+      extractedText = item.text.trim();
+    }
+
+    // 3. Construct Message
+    if (extractedText.trim().length > 0 || extractedCodeBlocks.length > 0) {
+      const finalCodeBlocks: CodeBlock[] = extractedCodeBlocks.map(cb => ({ code: cb.code ?? '', language: cb.language ?? 'plaintext' }));
+      const message: Message = {
+        codeBlocks: finalCodeBlocks,
+        content: extractedText.trim(),
+        metadata: { bubbleId: item.bubbleId, type: item.type, ...(item.timingInfo && { timingInfo: item.timingInfo }), ...(item.isThought && { isThought: item.isThought }) },
+        role,
+        text: extractedText.trim(),
+        ...(item.timingInfo && { timingInfo: item.timingInfo }),
+      };
+      processedMessages.push(message);
+    }
+  }
+
+  if (processedMessages.length === 0) {
+    return null; // Skip conversations with no processable messages
+  }
+
+  // Find workspace info (this is slightly redundant here, but adds path if found)
+  const workspaceInfo = findWorkspaceInfo(rawData.composerId)
+  const conversationData: ConversationData = {
+    composerId: rawData.composerId,
+    conversation: processedMessages,
+    createdAt: rawData.createdAt,
+    name: rawData.name,
+    text: rawData.text,
+    unifiedMode: rawData.unifiedMode,
+    workspaceName: workspaceInfo.name, // Use info found via composerId
+    workspacePath: workspaceInfo.path,
+  }
+  return conversationData;
+}
+
+// --- Refactored Core Extraction Logic --- 
+
+/**
+ * Extracts all conversations from the global database.
+ * @param limit Optional limit on the number of conversations to fetch.
+ * @returns An array of processed ConversationData objects.
+ */
+export async function extractGlobalConversations(limit?: number): Promise<ConversationData[]> {
+  const dbPath = getCursorDbPath()
+  if (!existsSync(dbPath)) {
+    console.error('Global database not found at:', dbPath)
     return []
   }
+
+  const spinner = ora('Extracting global conversations...').start()
+  let db: BetterSqlite3.Database | null = null
+  const conversations: ConversationData[] = []
+
+  try {
+    db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
+    const query = db.prepare(`
+      SELECT key, value 
+      FROM cursorDiskKV 
+      WHERE key LIKE 'composerData:%' 
+      ORDER BY key DESC 
+      ${limit ? 'LIMIT @limit' : ''}
+    `);
+    const rows = query.all(limit ? { limit } : undefined) as { key: string; value: Buffer }[];
+
+    spinner.text = `Processing ${rows.length} raw conversation entries...`
+
+    for (const row of rows) {
+      try {
+        const rawJson = row.value.toString('utf8')
+        const parsedJson = JSON.parse(rawJson) as unknown
+        // Check type inline
+        if (
+          typeof parsedJson === 'object' && parsedJson !== null &&
+          'composerId' in parsedJson && typeof (parsedJson as RawConversationData).composerId === 'string' &&
+          'conversation' in parsedJson && Array.isArray((parsedJson as RawConversationData).conversation) &&
+          'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
+        ) {
+          const rawData = parsedJson as RawConversationData;
+          const processedData = processConversationEntry(rawData);
+          if (processedData) {
+            conversations.push(processedData);
+          }
+        }
+      } catch {
+        // Ignore errors processing individual entries
+      }
+    }
+
+    spinner.succeed(`Successfully extracted and processed ${conversations.length} conversations.`)
+  } catch (error) {
+    spinner.fail(`Failed to extract conversations: ${error}`)
+  } finally {
+    db?.close()
+  }
+
+  // Sort final result by creation date descending
+  conversations.sort((a, b) => b.createdAt - a.createdAt);
+  return conversations
 }
 
 /**
- * Retrieves all conversations for a specific workspace.
- * @param workspaceName The name of the workspace to filter by
- * @returns A promise that resolves to an array of conversations for the workspace
+ * Gets conversations for a specific workspace.
  */
 export async function getConversationsForWorkspace(workspaceName: string): Promise<ConversationData[]> {
-  const spinner = ora({
-    color: 'cyan',
-    spinner: 'dots',
-    text: `Finding conversations for workspace "${workspaceName}"...`,
-  }).start()
+  const spinner = ora(`Finding conversations for workspace "${workspaceName}"...`).start()
+  const composerIds = getWorkspaceComposerIds(workspaceName);
 
-  try {
-    const dbPath = getCursorDbPath()
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
+  if (composerIds.size === 0) {
+    spinner.info(`No composer IDs found for workspace "${workspaceName}".`);
+    return [];
+  }
 
-    if (!existsSync(dbPath)) {
-      spinner.fail(`Global database not found at: ${dbPath}`)
-      return []
-    }
+  spinner.text = `Found ${composerIds.size} composer IDs for workspace. Fetching conversations...`
 
-    spinner.text = `Opening database connection: ${dbPath}`
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    const db = new BetterSqlite3(dbPath, { readonly: true })
-
-    try {
-      // First, build a mapping of composerIds to workspaces for the target workspace
-      spinner.text = `Building composerId mapping for workspace "${workspaceName}"...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      const composerIdsForWorkspace = new Set<string>()
-      const workspaceStoragePath = getWorkspaceStoragePath()
-
-      if (existsSync(workspaceStoragePath)) {
-        const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-
-        for (const workspace of workspaces) {
-          if (!workspace.isDirectory()) continue
-
-          const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
-          if (!existsSync(workspaceJsonPath)) continue
-
-          try {
-            const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
-            if (workspaceData.folder) {
-              const path = decodeWorkspacePath(workspaceData.folder)
-              const name = basename(path)
-
-              // Check if this is the workspace we're looking for
-              // Either the basename matches exactly (case-insensitive), or the workspaceName is contained in the path (case-insensitive)
-              if (name.toLowerCase() !== workspaceName.toLowerCase() && !path.toLowerCase().includes(workspaceName.toLowerCase())) continue
-
-              const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
-              if (!existsSync(dbPath)) continue
-
-              const workspaceDb = new BetterSqlite3(dbPath, { readonly: true })
-              const result = workspaceDb.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
-                | undefined
-                | { value: string }
-
-              if (result) {
-                const parsed = JSON.parse(result.value) as unknown
-                if (
-                  typeof parsed === 'object' &&
-                  parsed !== null &&
-                  'allComposers' in parsed &&
-                  Array.isArray(parsed.allComposers)
-                ) {
-                  // Add all composerIds for this workspace to our set
-                  for (const composer of parsed.allComposers) {
-                    if (typeof composer === 'object' && composer !== null && 'composerId' in composer) {
-                      composerIdsForWorkspace.add(composer.composerId as string)
-                    }
-                  }
-                }
-              }
-
-              workspaceDb.close()
-            }
-          } catch (error) {
-            console.error(`Error processing workspace ${workspace.name}:`, error)
-          }
-        }
-      }
-
-      spinner.text = `Found ${composerIdsForWorkspace.size} composerIds for workspace "${workspaceName}"`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // If we didn't find any composerIds for this workspace, return empty result
-      if (composerIdsForWorkspace.size === 0) {
-        spinner.info(`No composerIds found for workspace "${workspaceName}"`)
-        return []
-      }
-
-      spinner.text = 'Connected to database, querying conversations...'
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // Query for all conversations
-      const rows = db.prepare(
-        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC"
-      ).all() as { key: string; value: string }[]
-
-      if (rows.length === 0) {
-        spinner.info('No conversations found')
-        return []
-      }
-
-      spinner.text = `Found ${rows.length} conversations, filtering for workspace "${workspaceName}"...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      const workspaceConversations: ConversationData[] = []
-
-      // Process conversations and filter for the specified workspace using our composerId mapping
-      let processedCount = 0;
-      for (const row of rows) {
-        try {
-          // Update spinner every 10 items to show progress without slowing down too much
-          if (processedCount % 10 === 0) {
-            spinner.text = `Processed ${processedCount}/${rows.length} conversations...`;
-            await new Promise<void>((r) => {
-              setTimeout(r, 10)
-            });
-          }
-          processedCount++;
-
-          const parsed = JSON.parse(row.value) as unknown
-
-          if (!isComposerData(parsed)) {
-            continue
-          }
-
-          // Skip if this composerId is not in our target workspace
-          if (!composerIdsForWorkspace.has(parsed.composerId)) {
-            continue
-          }
-
-          // Skip conversations without messages
-          if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
-            continue
-          }
-
-          // Process any inline diffs in the conversation
-          for (const message of parsed.conversation) {
-            processInlineDiffs(message)
-          }
-
-          // Get workspace info for this conversation
-          const workspaceInfo = { name: workspaceName, path: '' }
-
-          // Get the full path if needed
-          if (composerIdsForWorkspace.has(parsed.composerId)) {
-            const fullWorkspaceInfo = findWorkspaceInfo(parsed.composerId)
-            if (fullWorkspaceInfo.path) {
-              workspaceInfo.path = fullWorkspaceInfo.path
-            }
-          }
-
-          const conversation: ConversationData = {
-            composerId: parsed.composerId,
-            context: parsed.context as ConversationData['context'],
-            conversation: parsed.conversation as ConversationData['conversation'],
-            createdAt: parsed.createdAt,
-            name: parsed.name,
-            richText: parsed.richText,
-            text: parsed.text,
-            unifiedMode: parsed.unifiedMode,
-            workspaceName: workspaceInfo.name,
-            workspacePath: workspaceInfo.path,
-          }
-
-          workspaceConversations.push(conversation)
-        } catch {
-          // Skip this conversation if there's an error processing it
-          continue
-        }
-      }
-
-      spinner.succeed(`Found ${workspaceConversations.length} conversations for workspace "${workspaceName}"`)
-      return workspaceConversations
-    } finally {
-      db.close()
-    }
-  } catch (error) {
-    spinner.fail('Error accessing database')
-    console.error('Error:', error)
+  const dbPath = getCursorDbPath()
+  if (!existsSync(dbPath)) {
+    spinner.fail('Global database not found.');
     return []
   }
+
+  let db: BetterSqlite3.Database | null = null;
+  const conversations: ConversationData[] = [];
+
+  try {
+    db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true });
+    const stmt = db.prepare("SELECT value FROM cursorDiskKV WHERE key = ?");
+
+    for (const id of composerIds) {
+      const key = `composerData:${id}`;
+      const row = stmt.get(key) as undefined | { value: Buffer };
+      if (row?.value) {
+        try {
+          const rawJson = row.value.toString('utf8');
+          const parsedJson = JSON.parse(rawJson) as unknown;
+          // Basic check before passing to detailed processor
+          if (
+            typeof parsedJson === 'object' && parsedJson !== null &&
+            'composerId' in parsedJson && typeof (parsedJson as RawConversationData).composerId === 'string' &&
+            'conversation' in parsedJson && Array.isArray((parsedJson as RawConversationData).conversation) &&
+            'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
+          ) {
+            const rawData = parsedJson as RawConversationData;
+            const processedData = processConversationEntry(rawData);
+            if (processedData) {
+              // Override workspace name/path with the one we searched for
+              processedData.workspaceName = workspaceName;
+              processedData.workspacePath = listWorkspaces().find(ws => ws.name === workspaceName)?.path || '';
+              conversations.push(processedData);
+            }
+          }
+        } catch {
+          // Ignore errors for individual entries
+        }
+      }
+    }
+
+    spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}".`);
+  } catch (error) {
+    spinner.fail(`Error fetching workspace conversations: ${error}`);
+  } finally {
+    db?.close();
+  }
+
+  // Sort final result by creation date descending
+  conversations.sort((a, b) => b.createdAt - a.createdAt);
+  return conversations;
 }
 
 /**
- * Retrieves the latest conversation for a specific workspace.
- * @param workspaceName The name of the workspace to filter by
- * @returns A promise that resolves to the latest conversation for the workspace, or null if none found
+ * Gets the latest conversation for a specific workspace.
  */
 export async function getLatestConversationForWorkspace(workspaceName: string): Promise<ConversationData | null> {
-  const spinner = ora({
-    color: 'cyan',
-    spinner: 'dots',
-    text: `Finding latest conversation for workspace "${workspaceName}"...`,
-  }).start()
-
-  try {
-    const dbPath = getCursorDbPath()
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    if (!existsSync(dbPath)) {
-      spinner.fail(`Global database not found at: ${dbPath}`)
-      return null
-    }
-
-    spinner.text = `Opening database connection: ${dbPath}`
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    const db = new BetterSqlite3(dbPath, { readonly: true })
-
-    try {
-      // First, build a mapping of composerIds to workspaces for the target workspace
-      spinner.text = `Building composerId mapping for workspace "${workspaceName}"...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      const composerIdsForWorkspace = new Set<string>()
-      const workspaceStoragePath = getWorkspaceStoragePath()
-      spinner.text = `Scanning workspaces in: ${workspaceStoragePath}`
-
-      if (existsSync(workspaceStoragePath)) {
-        const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-        spinner.text = `Scanning ${workspaces.length} workspace directories...`
-        let matchingWorkspaces = 0
-        let processedWorkspaces = 0
-
-        for (const workspace of workspaces) {
-          if (!workspace.isDirectory()) continue
-
-          const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
-          if (!existsSync(workspaceJsonPath)) continue
-
-          try {
-            const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
-            if (workspaceData.folder) {
-              const path = decodeWorkspacePath(workspaceData.folder)
-              const name = basename(path)
-              processedWorkspaces++
-              spinner.text = `Scanning workspaces: ${processedWorkspaces}/${workspaces.length}`
-
-              // Check if this is the workspace we're looking for
-              // Either the basename matches exactly (case-insensitive), or the workspaceName is contained in the path (case-insensitive)
-              if (name.toLowerCase() !== workspaceName.toLowerCase() && !path.toLowerCase().includes(workspaceName.toLowerCase())) {
-                continue
-              }
-              matchingWorkspaces++
-              spinner.text = `Found matching workspace: ${name}`
-
-              const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
-              if (!existsSync(dbPath)) continue
-
-              const workspaceDb = new BetterSqlite3(dbPath, { readonly: true })
-              const result = workspaceDb.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
-                | undefined
-                | { value: string }
-
-              if (result) {
-                const parsed = JSON.parse(result.value) as unknown
-                if (
-                  typeof parsed === 'object' &&
-                  parsed !== null &&
-                  'allComposers' in parsed &&
-                  Array.isArray(parsed.allComposers)
-                ) {
-                  // Add all composerIds for this workspace to our set
-                  let composersAdded = 0
-                  for (const composer of parsed.allComposers) {
-                    if (typeof composer === 'object' && composer !== null && 'composerId' in composer) {
-                      composerIdsForWorkspace.add(composer.composerId as string)
-                      composersAdded++
-                    }
-                  }
-                  if (composersAdded > 0) {
-                    spinner.text = `Added ${composersAdded} composers from workspace: ${name}`
-                  }
-                }
-              }
-
-              workspaceDb.close()
-            }
-          } catch (error) {
-            console.error(`Error processing workspace ${workspace.name}:`, error)
-          }
-        }
-      }
-
-      spinner.text = `Found ${composerIdsForWorkspace.size} composerIds for workspace "${workspaceName}"`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // If we didn't find any composerIds for this workspace, return null
-      if (composerIdsForWorkspace.size === 0) {
-        spinner.info(`No composerIds found for workspace "${workspaceName}"`)
-        return null
-      }
-
-      spinner.text = 'Connected to database, querying conversations...'
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // Query for the 100 most recent conversations to increase chances of finding workspace-specific ones
-      const rows = db.prepare(
-        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 100"
-      ).all() as { key: string; value: string }[]
-
-      if (rows.length === 0) {
-        spinner.info('No conversations found')
-        return null
-      }
-
-      spinner.text = `Found ${rows.length} recent conversations, searching for workspace "${workspaceName}"...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // Process conversations one by one until we find a suitable one for the workspace
-      let processedCount = 0;
-      let matchedCount = 0;
-      for (const row of rows) {
-        try {
-          // Update spinner every 5 items to show progress without slowing down too much
-          if (processedCount % 5 === 0) {
-            spinner.text = `Checking conversation ${processedCount + 1}/${rows.length} for workspace "${workspaceName}"...`;
-            await new Promise<void>((r) => {
-              setTimeout(r, 10)
-            });
-          }
-          processedCount++;
-
-          const parsed = JSON.parse(row.value) as unknown
-
-          if (!isComposerData(parsed)) {
-            continue
-          }
-
-          // Skip if this composerId is not in our target workspace
-          if (!composerIdsForWorkspace.has(parsed.composerId)) {
-            continue
-          }
-
-          matchedCount++;
-          spinner.text = `Found ${matchedCount} matching conversations for workspace "${workspaceName}"`
-
-          // Skip conversations without messages
-          if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
-            continue
-          }
-
-          // Process any inline diffs in the conversation
-          for (const message of parsed.conversation) {
-            processInlineDiffs(message)
-          }
-
-          // Get workspace info for this conversation
-          const workspaceInfo = { name: workspaceName, path: '' }
-
-          // Get the full path if needed
-          if (composerIdsForWorkspace.has(parsed.composerId)) {
-            const fullWorkspaceInfo = findWorkspaceInfo(parsed.composerId)
-            if (fullWorkspaceInfo.path) {
-              workspaceInfo.path = fullWorkspaceInfo.path
-            }
-          }
-
-          const conversation: ConversationData = {
-            composerId: parsed.composerId,
-            context: parsed.context as ConversationData['context'],
-            conversation: parsed.conversation as ConversationData['conversation'],
-            createdAt: parsed.createdAt,
-            name: parsed.name,
-            richText: parsed.richText,
-            text: parsed.text,
-            unifiedMode: parsed.unifiedMode,
-            workspaceName: workspaceInfo.name,
-            workspacePath: workspaceInfo.path,
-          }
-
-          spinner.succeed(`Found conversation for workspace "${workspaceName}"`)
-          return conversation
-        } catch {
-          // Skip this conversation if there's an error processing it
-          continue
-        }
-      }
-
-      // If we get here, we didn't find any suitable conversations for the workspace
-      spinner.info(`No conversations found for workspace "${workspaceName}"`)
-      return null
-    } finally {
-      db.close()
-    }
-  } catch (error) {
-    spinner.fail('Error accessing database')
-    console.error('Error:', error)
-    return null
-  }
+  const conversations = await getConversationsForWorkspace(workspaceName);
+  // Already sorted by getConversationsForWorkspace
+  return conversations.length > 0 ? conversations[0] : null;
 }
 
-/**
- * Retrieves the latest conversation with content.
- * @returns A promise that resolves to the latest conversation, or null if none found
- */
+// --- Global Latest Function --- 
 export async function getLatestConversation(): Promise<ConversationData | null> {
-  const spinner = ora({
-    color: 'cyan',
-    spinner: 'dots',
-    text: 'Finding latest conversation with content...',
-  }).start()
-
-  try {
-    const dbPath = getCursorDbPath()
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    if (!existsSync(dbPath)) {
-      spinner.fail(`Global database not found at: ${dbPath}`)
-      return null
-    }
-
-    spinner.text = `Opening database connection: ${dbPath}`
-    await new Promise<void>((r) => {
-      setTimeout(r, 50)
-    })
-
-    const db = new BetterSqlite3(dbPath, { readonly: true })
-
-    try {
-      spinner.text = 'Connected to database, querying conversations...'
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // Query for the 20 most recent conversations
-      const rows = db.prepare(
-        "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' ORDER BY CAST(json_extract(value, '$.createdAt') AS INTEGER) DESC LIMIT 20"
-      ).all() as { key: string; value: string }[]
-
-      if (rows.length === 0) {
-        spinner.info('No conversations found')
-        return null
-      }
-
-      spinner.text = `Found ${rows.length} recent conversations, searching for one with content...`
-      await new Promise<void>((r) => {
-        setTimeout(r, 50)
-      })
-
-      // Process conversations one by one until we find a suitable one
-      let processedCount = 0;
-      for (const row of rows) {
-        try {
-          // Update spinner every 5 items to show progress without slowing down too much
-          if (processedCount % 5 === 0) {
-            spinner.text = `Checking conversation ${processedCount + 1}/${rows.length} for content...`;
-            await new Promise<void>((r) => {
-              setTimeout(r, 10)
-            });
-          }
-          processedCount++;
-
-          const parsed = JSON.parse(row.value) as unknown
-
-          if (!isComposerData(parsed)) {
-            continue
-          }
-
-          // Skip conversations without messages
-          if (!Array.isArray(parsed.conversation) || parsed.conversation.length === 0) {
-            continue
-          }
-
-          // Skip unnamed conversations without assistant messages
-          const hasAssistant = parsed.conversation.some((message: any) =>
-            message &&
-            (
-              (typeof message.role === 'string' && message.role === 'Assistant') ||
-              message.type === '2' ||
-              message.type === 2
-            )
-          )
-
-          if ((!parsed.name || parsed.name === 'Unnamed Conversation') && !hasAssistant) {
-            continue
-          }
-
-          // Process any inline diffs in the conversation
-          for (const message of parsed.conversation) {
-            processInlineDiffs(message)
-          }
-
-          // Get workspace info for this conversation
-          const workspaceInfo = findWorkspaceInfo(parsed.composerId)
-
-          const conversation: ConversationData = {
-            composerId: parsed.composerId,
-            context: parsed.context as ConversationData['context'],
-            conversation: parsed.conversation as ConversationData['conversation'],
-            createdAt: parsed.createdAt,
-            name: parsed.name,
-            richText: parsed.richText,
-            text: parsed.text,
-            unifiedMode: parsed.unifiedMode,
-            workspaceName: workspaceInfo.name,
-            workspacePath: workspaceInfo.path,
-          }
-
-          spinner.succeed('Found conversation with content')
-          return conversation
-        } catch {
-          // Skip this conversation if there's an error processing it
-          continue
-        }
-      }
-
-      // If we get here, we didn't find any suitable conversations
-      // Fall back to the first conversation
-      try {
-        const firstRow = rows[0]
-        const parsed = JSON.parse(firstRow.value) as unknown
-
-        if (!isComposerData(parsed)) {
-          spinner.fail('No valid conversations found')
-          return null
-        }
-
-        // Process any inline diffs in the conversation
-        if (Array.isArray(parsed.conversation)) {
-          for (const message of parsed.conversation) {
-            processInlineDiffs(message)
-          }
-        }
-
-        // Get workspace info for this conversation
-        const workspaceInfo = findWorkspaceInfo(parsed.composerId)
-
-        spinner.info('No conversations with content found, returning most recent conversation')
-
-        return {
-          composerId: parsed.composerId,
-          context: parsed.context as ConversationData['context'],
-          conversation: parsed.conversation as ConversationData['conversation'],
-          createdAt: parsed.createdAt,
-          name: parsed.name,
-          richText: parsed.richText,
-          text: parsed.text,
-          unifiedMode: parsed.unifiedMode,
-          workspaceName: workspaceInfo.name,
-          workspacePath: workspaceInfo.path,
-        }
-      } catch (error) {
-        spinner.fail('Error processing conversation')
-        console.error('Error:', error)
-        return null
-      }
-    } finally {
-      db.close()
-    }
-  } catch (error) {
-    spinner.fail('Error accessing database')
-    console.error('Error:', error)
-    return null
-  }
+  // console.warn("getLatestConversation might need refactoring if used independently, uses extractGlobalConversations which is now refactored.");
+  // Use the limit parameter for efficiency
+  const conversations = await extractGlobalConversations(1);
+  return conversations.length > 0 ? conversations[0] : null;
 }

@@ -1,4 +1,4 @@
-import type {ConversationData, FileChange, Message} from '../types.js'
+import type { ConversationData, FileChange, Message } from '../types.js'
 
 /**
  * Formats a numeric timestamp into an ISO string.
@@ -40,14 +40,14 @@ export function formatMessage(message: Message): null | string {
     (message.type === '1' || message.type === 1
       ? 'User'
       : message.type === '2' || message.type === 2
-      ? 'Assistant'
-      : 'Unknown')
+        ? 'Assistant'
+        : 'Unknown')
 
   let output = `### ${role}\n\n`
 
   // Add timing information if available
   if (message.timingInfo) {
-    const {clientEndTime, clientStartTime} = message.timingInfo
+    const { clientEndTime, clientStartTime } = message.timingInfo
     if (clientStartTime && clientEndTime) {
       const formattedStart = new Date(clientStartTime).toLocaleString()
       const formattedEnd = new Date(clientEndTime).toLocaleString()
@@ -183,35 +183,36 @@ export function formatMessage(message: Message): null | string {
 /**
  * Formats a conversation into Markdown.
  */
-export function formatConversation(conversation: ConversationData): string {
+export function formatConversation(conversationData: ConversationData): string {
   let output = ''
 
   // Add header with conversation info
-  const date = new Date(conversation.createdAt).toLocaleString()
-  output += `# ${conversation.name || 'Unnamed Conversation'}\n\n`
+  const date = new Date(conversationData.createdAt).toLocaleString()
+  output += `# ${conversationData.name || 'Unnamed Conversation'}\n\n`
   output += `_Created: ${date}_\n\n`
 
-  if (conversation.workspaceName) {
-    output += `_Workspace: \`${conversation.workspaceName}\`_\n\n`
+  if (conversationData.workspaceName) {
+    output += `_Workspace: \`${conversationData.workspaceName}\`_\n\n`
   }
 
-  // Format each message
-  for (const message of conversation.conversation) {
-    const formatted = formatMessage(message)
+  // Format each message - Iterate over conversationData.conversation (which is Message[])
+  for (const message of conversationData.conversation) {
+    const formatted = formatMessage(message) // Pass the Message object
     if (formatted) {
-      output += formatted
+      output += formatted + '---\n\n'
     }
   }
 
-  return output
+  return output.trim()
 }
 
 /**
- * Checks if a conversation has any messages from the Assistant
+ * Checks if a conversation has any assistant messages.
  */
-export function hasAssistantMessages(conversation: ConversationData): boolean {
-  return conversation.conversation.some(
-    (message) => message.role === 'Assistant' || message.type === '2' || message.type === 2,
+export function hasAssistantMessages(conversationData: ConversationData): boolean {
+  // Operate on the processed conversationData.conversation (Message[])
+  return conversationData.conversation.some(
+    (message) => message.role === 'assistant' // Check the role on the Message object
   )
 }
 
