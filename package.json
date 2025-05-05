@@ -69,7 +69,10 @@
       "@oclif/plugin-plugins"
     ]
   },
-  "repository": "johnlindquist/cursor-history",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnlindquist/cursor-history.git"
+  },
   "scripts": {
     "build": "shx rm -rf dist && tsc -b",
     "default": "pnpm build && ./bin/run.js",
