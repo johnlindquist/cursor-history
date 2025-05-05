@@ -50,44 +50,30 @@ See `chi --help` for the full command list.
 
 ## Troubleshooting: Native Module Version Mismatch (better-sqlite3)
 
-### Why do I see errors like this?
+### If you see errors like this when running the CLI globally:
 
 ```
 The module 'better_sqlite3.node' was compiled against a different Node.js version using NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 115. Please try re-compiling or re-installing the module (for instance, using `npm rebuild` or `npm install`).
 ```
 
-#### What does this mean?
-- `better-sqlite3` is a native Node.js module. Its binary is built for the Node.js version present at install time.
-- If you upgrade/downgrade Node.js, or install this CLI globally under one Node version and run it under another, the binary may not match the Node ABI.
-- This is a fundamental limitation of native Node modules and global installs in Node.js.
+### Solution for pnpm global installs
 
-#### How does the CLI handle this?
-- The CLI will attempt to auto-rebuild `better-sqlite3` if it detects a version mismatch.
-- If auto-rebuild fails, you will see a clear error message with instructions.
+**Run this command:**
 
-#### How do I fix it?
-1. Open a terminal in the global install directory for this CLI (wherever you installed it globally).
-2. Run the following command (depending on your package manager):
-   - With pnpm:
-     ```sh
-     pnpm rebuild better-sqlite3
-     ```
-   - With npm:
-     ```sh
-     npm rebuild better-sqlite3
-     ```
-   - With yarn:
-     ```sh
-     yarn add better-sqlite3 --force
-     ```
-3. Re-run the CLI command.
+```sh
+cd $(pnpm root -g)/better-sqlite3 && npm rebuild better-sqlite3
+```
 
-#### Why can't this be fully prevented?
-- This is a Node.js ecosystem limitation for native modules and global CLI tools.
-- There is no way to pre-compile a binary that works for all Node.js versions.
-- The CLI does its best to auto-rebuild, but sometimes manual intervention is required after Node.js upgrades.
+This will rebuild the native binary for your current Node.js version and architecture. After running this, your CLI should work globally.
 
-If you continue to have issues, please open an issue on GitHub with your Node.js version, OS, and the full error message.
+#### Why is this needed?
+- pnpm's global store does not always trigger a native rebuild for dependencies like `better-sqlite3` when installing a tarball or linking.
+- The native binary may be left in an old or missing state after a Node.js upgrade or a global install.
+- Manually running `npm rebuild` in the global store directory ensures the binary is rebuilt for your current environment.
+
+#### If you still have issues
+- Make sure you are using the same Node.js version for both the install and when running the CLI.
+- You may need to remove and reinstall the global package if the error persists.
 
 ---
 
@@ -160,4 +146,3 @@ PRs and issues are welcome! If you have ideas for smoothing out the native‑mod
 ---
 
 © 2025 John Lindquist — MIT
-
