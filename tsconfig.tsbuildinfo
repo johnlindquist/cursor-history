@@ -1,1 +1,1 @@
-{"root":["./src/debug-conversations.ts","./src/debug-metadata.ts","./src/debug-timestamps.ts","./src/index.ts","./src/types.ts","./src/commands/extract/index.ts","./src/db/extract-conversations.ts","./src/utils/config.ts","./src/utils/formatting.ts"],"version":"5.7.3"}
+{"root":["./src/debug-conversations.ts","./src/debug-metadata.ts","./src/debug-timestamps.ts","./src/index.ts","./src/types.ts","./src/commands/extract/index.ts","./src/db/extract-conversations.ts","./src/utils/config.ts","./src/utils/formatting.ts"],"version":"5.8.3"}

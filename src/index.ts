@@ -21,6 +21,7 @@ const EXAMPLE_EXTRACT = `$ chi --extract\nExtract all conversations to markdown 
 const EXAMPLE_SEARCH = `$ chi --search\nInteractively search and view conversations`;
 const EXAMPLE_SELECT = `$ chi --select\nIf current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard`;
 const EXAMPLE_MANAGE = `$ chi --manage --older-than 30d\nRemove conversation files older than 30 days`;
+const EXAMPLE_WORKSPACE = `$ chi --workspace my-project\nExport the latest conversation for the specified workspace 'my-project'`;
 
 /**
  * Parse a duration string into milliseconds
@@ -57,6 +58,8 @@ export default class CursorHistory extends Command {
   static description = 'Manage and search Cursor conversation history'
   static enableJsonFlag = false // Disable JSON flag since we don't use it
   static examples = [
+    `$ chi\nExport the latest conversation for the current workspace, or global latest if none found.`,
+    EXAMPLE_WORKSPACE,
     EXAMPLE_EXTRACT,
     EXAMPLE_SEARCH,
     EXAMPLE_SELECT,
@@ -96,6 +99,11 @@ export default class CursorHistory extends Command {
       char: 'v',
       description: 'Show CLI version',
     }),
+    workspace: Flags.string({
+      char: 'w',
+      description: 'Specify the workspace name to target (uses current directory name if not provided)',
+      exclusive: ['extract', 'search'],
+    }),
   }
   private conversations: ConversationData[] = []
 
@@ -127,27 +135,28 @@ export default class CursorHistory extends Command {
       // Manage flag: prune/archive old conversation files
       await this.manageConversationFiles(flags['older-than'], flags.archive)
     } else {
-      // Default behavior: get latest conversation for current workspace or global latest
+      // Default behavior or specific workspace via flag
 
-      // Get current directory name to use as workspace filter
-      const currentDirName = basename(process.cwd())
-      this.log(`Current directory: ${currentDirName}`)
+      // Determine target workspace name
+      const targetWorkspaceName = flags.workspace || basename(process.cwd());
+      this.log(`Target workspace: ${targetWorkspaceName} ${flags.workspace ? '(from flag)' : '(from current directory)'}`);
 
-      // Try to find a conversation for the current workspace
-      const workspaceConversation = await getLatestConversationForWorkspace(currentDirName)
+      // Try to find a conversation for the target workspace
+      const workspaceConversation = await getLatestConversationForWorkspace(targetWorkspaceName)
 
       if (workspaceConversation) {
-        this.log(`Found conversation for workspace: ${currentDirName}`)
+        this.log(`Found latest conversation for workspace: ${targetWorkspaceName}`)
         await this.exportConversation(workspaceConversation)
       } else {
         // Fall back to global latest conversation
-        this.log('No workspace-specific conversation found, using latest global conversation')
+        this.log(`No conversation found for workspace '${targetWorkspaceName}', checking latest global conversation`)
         const latestConversation = await getLatestConversation()
         if (!latestConversation) {
-          this.log('No conversations found.')
+          this.log('No conversations found at all.')
           return
         }
 
+        this.log('Exporting latest global conversation.')
         await this.exportConversation(latestConversation)
       }
     }
@@ -333,10 +342,10 @@ export default class CursorHistory extends Command {
         return nameMatch; // For now, only search name
       })
       .map((conv) => ({
-        // Use the potentially updated display name function
-        name: this.getDisplayName(conv),
         // Keep description as date for sorting/info
         description: `Created: ${new Date(conv.createdAt).toLocaleString()}${conv.workspaceName ? ' | Workspace: ' + conv.workspaceName : ''}`,
+        // Use the potentially updated display name function
+        name: this.getDisplayName(conv),
         value: conv,
       }))
   }
@@ -359,52 +368,60 @@ export default class CursorHistory extends Command {
 
     this.log(`Found ${workspaces.length} workspaces.`)
 
-    // Get current directory name to use as workspace filter
-    const currentDirName = basename(process.cwd())
-    this.log(`Current directory: ${currentDirName}`)
-
-    // Check if current directory matches a workspace
-    // Either the workspace name matches exactly (case-insensitive), or the currentDirName is contained in the workspace path (case-insensitive)
-    const matchingWorkspace = workspaces.find((ws: { id: string; name: string; path: string; }) =>
-      ws.name.toLowerCase() === currentDirName.toLowerCase()
-    )
-
+    // Check for workspace flag
+    const { flags } = await this.parse(CursorHistory)
+    let workspaceNameToUse: string | undefined
     let selectedWorkspace: undefined | { id: string; name: string; path: string; }
 
-    if (matchingWorkspace) {
-      // If there's a matching workspace, use it directly
-      this.log(`Current directory matches workspace: ${matchingWorkspace.name}`)
-      selectedWorkspace = matchingWorkspace
+    if (flags.workspace) {
+      // Use the workspace flag directly
+      workspaceNameToUse = flags.workspace
+      selectedWorkspace = workspaces.find(ws => flags.workspace && ws.name.toLowerCase() === flags.workspace.toLowerCase())
+      if (!selectedWorkspace) {
+        this.log(`Workspace '${flags.workspace}' not found.`)
+        return
+      }
+      this.log(`Using workspace from flag: ${flags.workspace}`)
     } else {
-      // Otherwise, allow selecting a workspace
-      selectedWorkspace = await search({
-        message: 'Select a workspace:',
-        async source(term) {
-          const termLower = term?.toLowerCase() || ''
-          return workspaces
-            .filter((ws: { id: string; name: string; path: string; }) =>
-              !term || ws.name.toLowerCase().includes(termLower)
-            )
-            .map((ws: { id: string; name: string; path: string; }) => ({
-              description: ws.path,
-              name: ws.name,
-              value: ws,
-            }))
-        },
-      })
-    }
+      // Get current directory name to use as workspace filter
+      const currentDirName = basename(process.cwd())
+      this.log(`Current directory: ${currentDirName}`)
 
-    if (!selectedWorkspace) {
-      this.log('No workspace selected.')
-      return
+      // Check if current directory matches a workspace
+      const matchingWorkspace = workspaces.find((ws: { id: string; name: string; path: string; }) =>
+        ws.name.toLowerCase() === currentDirName.toLowerCase()
+      )
+
+      if (matchingWorkspace) {
+        this.log(`Current directory matches workspace: ${matchingWorkspace.name}`)
+        selectedWorkspace = matchingWorkspace
+        workspaceNameToUse = currentDirName
+      } else {
+        // Otherwise, allow selecting a workspace
+        selectedWorkspace = await search({
+          message: 'Select a workspace:',
+          async source(term) {
+            const termLower = term?.toLowerCase() || ''
+            return workspaces
+              .filter((ws: { id: string; name: string; path: string; }) =>
+                !term || ws.name.toLowerCase().includes(termLower)
+              )
+              .map((ws: { id: string; name: string; path: string; }) => ({
+                description: ws.path,
+                name: ws.name,
+                value: ws,
+              }))
+          },
+        })
+        if (!selectedWorkspace) {
+          this.log('No workspace selected.')
+          return
+        }
+        workspaceNameToUse = selectedWorkspace.name
+      }
     }
 
     this.log(`Selected workspace: ${selectedWorkspace.name}`)
-
-    // Get conversations for the selected workspace
-    // If the current directory matches a workspace, use the current directory name
-    // Otherwise, use the selected workspace's name
-    const workspaceNameToUse = matchingWorkspace ? currentDirName : selectedWorkspace.name
     this.log(`Using workspace name: ${workspaceNameToUse} for conversation lookup`)
     const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse)
 
@@ -421,10 +438,16 @@ export default class CursorHistory extends Command {
       source: async (term) => {
         const termLower = term?.toLowerCase() || ''
         return workspaceConversations
-          .filter(conv => !term ||
-            (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
-            (conv.text?.toLowerCase() || '').includes(termLower)
-          )
+          .filter(conv => {
+            // Always include metadata-only conversations (empty conversation array)
+            if (conv.conversation.length === 0) {
+              return !term || (conv.name?.toLowerCase().includes(termLower) || conv.text?.toLowerCase().includes(termLower));
+            }
+            // Otherwise, filter as before
+            return !term ||
+              (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
+              (conv.text?.toLowerCase() || '').includes(termLower)
+          })
           .map(conv => ({
             description: new Date(conv.createdAt).toLocaleString(),
             name: this.getDisplayName(conv),

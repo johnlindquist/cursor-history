@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Get the directory of the current script
@@ -24,8 +24,8 @@ console.log(`Building project...`);
 // Run pnpm build first
 const buildProcess = spawn('pnpm', ['build'], {
   cwd: projectRoot, // Run build from project root
-  stdio: 'inherit',
-  shell: true // Use shell for pnpm command
+  shell: true, // Use shell for pnpm command
+  stdio: 'inherit'
 });
 
 buildProcess.on('close', (buildCode) => {

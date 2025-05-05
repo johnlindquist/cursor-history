@@ -1,0 +1,23 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+# Workspace Conversation Retrieval Logic
+
+When the `chi` command is run without flags (or potentially with other commands needing workspace context), it attempts to find conversations specific to the current working directory.
+
+## Logic Flow
+
+1.  **Get Current Directory Name:** The base name of the current working directory is determined (e.g., `workshop-demos` from `/Users/johnlindquist/workshop-demos`).
+2.  **Search Workspace Metadata:** The function `getWorkspaceComposerIds` in [`src/db/extract-conversations.ts`](mdc:src/db/extract-conversations.ts) iterates through subdirectories in `~/Library/Application Support/Cursor/User/workspaceStorage/` (on macOS).
+3.  **Match Folder Path:** For each subdirectory `<hash>`, it reads [`workspaceStorage/<hash>/workspace.json`](mdc:~/Library/Application Support/Cursor/User/workspaceStorage/<hash>/workspace.json).
+    - It parses the `folder` field (a URI like `file:///path/to/folder`).
+    - It compares the decoded folder path/name against the current directory name.
+4.  **Extract Composer IDs:** If a match is found, it opens the corresponding workspace database [`workspaceStorage/<hash>/state.vscdb`](mdc:~/Library/Application Support/Cursor/User/workspaceStorage/<hash>/state.vscdb) and extracts `composerId` values associated with the key `composer.composerData`.
+5.  **Fetch Conversation Data (BUG):** The `getConversationsForWorkspace` function receives these IDs but **incorrectly** tries to fetch the full conversation data using these IDs from the **global** database (`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`).
+6.  **Result:** Because the composer data format in the global DB doesn't match what's expected or the IDs aren't found there with conversation arrays, it fails to retrieve workspace-specific conversations and falls back to global search.
+
+## Required Fix
+
+The `getConversationsForWorkspace` function needs to be modified to accept the path to the specific **workspace** `state.vscdb` (found in step 4) and use that database connection to query for conversation details using the extracted composer IDs.

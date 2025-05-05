@@ -1,0 +1,47 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+---
+description: Overview of the Cursor History (chi) CLI tool, its structure, and key logic.
+globs: []
+alwaysApply: true
+---
+# Cursor History (chi) CLI Tool Overview
+
+This CLI tool extracts and manages conversation history from the Cursor AI editor's SQLite databases.
+
+## Key Functionality
+- Extracts conversations to markdown files.
+- Filters conversations by the current workspace directory name.
+- Searches conversations interactively.
+- Exports the latest conversation.
+
+## Project Structure
+- **Entry Point:** [`src/index.ts`](mdc:src/index.ts) (Uses oclif for command handling)
+- **Core Logic:** [`src/db/extract-conversations.ts`](mdc:src/db/extract-conversations.ts)
+- **Build Output:** `dist/` (Compiled JavaScript)
+- **Executable Script:** [`bin/run.js`](mdc:bin/run.js) (Imports from `dist/` and executes oclif)
+- **Configuration:** [`package.json`](mdc:package.json), [`tsconfig.json`](mdc:tsconfig.json)
+
+## Database Locations (macOS Example)
+- **Global DB:** `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (Contains global conversations and workspace metadata links)
+- **Workspace DBs:** `~/Library/Application Support/Cursor/User/workspaceStorage/<hash>/state.vscdb` (Contains workspace-specific settings and conversation composer IDs)
+- **Workspace Metadata:** `~/Library/Application Support/Cursor/User/workspaceStorage/<hash>/workspace.json` (Links workspace hash to folder path)
+
+## Core Logic Flow (Workspace Filtering)
+1.  Get the current directory name (e.g., "my-project").
+2.  The function `getWorkspaceComposerIds` in [`src/db/extract-conversations.ts`](mdc:src/db/extract-conversations.ts) searches `workspaceStorage` by:
+    - Reading each `<hash>/workspace.json`.
+    - Parsing the `folder` URI (e.g., `file:///path/to/my-project`).
+    - Comparing the folder name/path with the current directory name.
+3.  If a match is found, it extracts composer IDs from the corresponding workspace database (`workspaceStorage/<hash>/state.vscdb`).
+4.  **Identified Bug:** The `getConversationsForWorkspace` function *currently* takes these IDs but incorrectly tries to fetch the full conversation data from the **global** DB (`globalStorage/state.vscdb`) instead of the specific **workspace** DB (`workspaceStorage/<hash>/state.vscdb`).
+5.  If no workspace conversations are found (due to the bug or no match), it falls back to the latest conversation in the global DB.
+
+## Commands
+- `chi` (default): Tries to export the latest conversation for the current workspace, falls back to global latest.
+- `chi --extract`: Extracts all conversations (currently likely only global due to the bug).
+- `chi --search`: Interactively search conversations.
+

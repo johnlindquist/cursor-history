@@ -2,6 +2,7 @@ import BetterSqlite3 from 'better-sqlite3'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { platform } from 'node:os'
 import { basename, join } from 'node:path'
+import { inspect } from 'node:util'
 import ora from 'ora'
 
 import type {
@@ -284,80 +285,151 @@ export function listWorkspaces(): Array<{ id: string; name: string; path: string
   return result
 }
 
-// --- NEW HELPER: Get Composer IDs for a Workspace --- 
-function getWorkspaceComposerIds(workspaceName: string): Set<string> {
-  const composerIds = new Set<string>()
+/**
+ * Finds workspace subdirectories matching the given name and extracts
+ * composer IDs and the database path from their respective state.vscdb files.
+ *
+ * @param workspaceName The base name of the workspace directory to find.
+ * @returns An object containing the set of composer IDs and the path to the specific workspace database, or null if not found.
+ */
+function getWorkspaceInfo(workspaceName: string): null | { composerIds: Set<string>; dbPath: string; rawConversationJson?: string } {
   const workspaceStoragePath = getWorkspaceStoragePath()
-  const nameLower = workspaceName.toLowerCase()
-
-  if (!existsSync(workspaceStoragePath)) return composerIds
-
-  const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-
-  for (const workspace of workspaces) {
-    if (!workspace.isDirectory()) continue
-
-    const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
-    if (!existsSync(workspaceJsonPath)) continue
-
-    let workspacePath = '';
-    let currentWorkspaceName = '';
-    try {
-      const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
-      if (workspaceData.folder) {
-        workspacePath = decodeWorkspacePath(workspaceData.folder)
-        currentWorkspaceName = basename(workspacePath)
-      } else {
-        continue; // Skip if no folder info
-      }
-    } catch {
-      // console.error(`Error reading workspace JSON ${workspace.name}:`, error)
-      continue;
-    }
-
-    // Check if this workspace matches the target name (case-insensitive)
-    // Match if basename is the same OR if the full path contains the name
-    if (currentWorkspaceName.toLowerCase() !== nameLower && !workspacePath.toLowerCase().includes(nameLower)) {
-      continue;
-    }
-
-    // Found a matching workspace, now read its DB for composer IDs
-    const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
-    if (!existsSync(dbPath)) continue
-
-    let db: BetterSqlite3.Database | null = null;
-    try {
-      db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
-      const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as undefined | { value: string }
-
-      if (result?.value) {
-        const parsed = JSON.parse(result.value) as unknown
-        if (
-          typeof parsed === 'object' &&
-          parsed !== null &&
-          'allComposers' in parsed &&
-          Array.isArray(parsed.allComposers)
-        ) {
-          for (const composer of parsed.allComposers) {
-            if (typeof composer === 'object' && composer !== null && 'composerId' in composer && typeof composer.composerId === 'string') {
-              composerIds.add(composer.composerId)
-            }
-          }
-        }
-      }
-    } catch {
-      // console.error(`Error reading workspace DB ${dbPath}:`, error)
-    } finally {
-      db?.close()
-    }
+  if (!existsSync(workspaceStoragePath)) {
+    console.warn(`Workspace storage path not found: ${workspaceStoragePath}`)
+    return null; // Return null if we can't even read the directory
   }
 
-  return composerIds
+  let foundWorkspace: null | { composerIds: Set<string>; dbPath: string; rawConversationJson?: string } = null;
+  const spinner = ora(`Searching for workspace '${workspaceName}' metadata`).start()
+
+  try {
+    const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
+
+    for (const workspace of workspaces) {
+      if (!workspace.isDirectory()) continue
+
+      const workspaceDirPath = join(workspaceStoragePath, workspace.name)
+      const workspaceJsonPath = join(workspaceDirPath, 'workspace.json')
+      const dbPath = join(workspaceDirPath, 'state.vscdb')
+
+      // Check if workspace.json and state.vscdb exist
+      if (!existsSync(workspaceJsonPath) || !existsSync(dbPath)) {
+        continue
+      }
+
+      try {
+        const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8')) as {
+          folder?: string
+          id?: string
+          // Other potential properties
+        }
+
+        if (!workspaceData.folder) continue
+
+        const decodedPath = decodeWorkspacePath(workspaceData.folder)
+        const currentWorkspaceBaseName = basename(decodedPath)
+
+        // Compare base names
+        if (currentWorkspaceBaseName === workspaceName) {
+          spinner.text = `Found matching workspace metadata for '${workspaceName}'. Reading database ${basename(dbPath)}...`
+          // Found the matching workspace, now extract composer IDs from its DB
+          let db: BetterSqlite3.Database | null = null;
+          const composerIds = new Set<string>();
+          let potentialRawJson: string | undefined; // Variable to store potential JSON
+          try {
+            db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
+            // Query for keys that store composer data.
+            // This query assumes composer IDs are stored within a JSON value under the key 'composer.composerData' or related keys.
+            const results = db
+              .prepare("SELECT value FROM ItemTable WHERE key LIKE '%composer.composerData%' OR key LIKE '%workbench.editors.textResourceEditor%'") // Broaden search
+              .all() as Array<{ value: string }>
+
+            let foundIdsInThisDb = false;
+            for (const row of results) {
+              try {
+                const data = JSON.parse(row.value) as unknown
+                // Look for composer IDs in various possible structures
+                if (typeof data === 'object' && data !== null) {
+                  // Prioritize finding 'allComposers' structure first
+                  if ('allComposers' in data && Array.isArray(data.allComposers)) {
+                    for (const composer of data.allComposers) {
+                      if (typeof composer === 'object' && composer !== null && 'composerId' in composer && typeof composer.composerId === 'string') {
+                        composerIds.add(composer.composerId)
+                        foundIdsInThisDb = true;
+                      }
+                    }
+                    // Always set potentialRawJson if allComposers is present
+                    potentialRawJson = row.value;
+                  } else if ('composerId' in data && typeof data.composerId === 'string') {
+                    // Handle case where composerId is directly in the parsed object
+                    composerIds.add(data.composerId);
+                    foundIdsInThisDb = true;
+                    // Check if this simpler structure also contains the conversation array
+                    if ('conversation' in data && Array.isArray(data.conversation)) {
+                      potentialRawJson = row.value; // Store the raw JSON string
+                      // console.log(`[Debug getWorkspaceInfo] Found potential conversation JSON in ItemTable row (direct composerId structure)`);
+                    }
+                  }
+                  // Add more checks for different potential structures if needed (e.g., editor history)
+                }
+              } catch /* jsonError */ {
+                // Ignore entries that are not valid JSON or don't match expected structures
+                // console.warn(`Skipping non-JSON or unexpected structure in row for key in ${dbPath}:`, jsonError);
+              }
+
+              // If we found potential JSON, stop processing more rows for this DB
+              if (potentialRawJson) break;
+            }
+
+            db.close() // Close DB after successful query
+
+            if (foundIdsInThisDb) { // Use the flag set inside the loop
+              spinner.succeed(`Found ${composerIds.size} potential composer IDs in workspace '${workspaceName}' database (${basename(dbPath)}). ${potentialRawJson ? 'Found potential conversation data directly.' : 'Direct conversation data not found in ItemTable.'}`)
+              // Include the potentialRawJson in the return object
+              foundWorkspace = { composerIds, dbPath, rawConversationJson: potentialRawJson };
+              break; // Stop searching workspace directories once found
+            } else {
+              spinner.info(`Workspace '${workspaceName}' database (${basename(dbPath)}) found, but no composer IDs extracted.`)
+            }
+
+          } catch (dbError) {
+            spinner.fail(`Error reading workspace DB ${dbPath}: ${dbError instanceof Error ? dbError.message : String(dbError)}`)
+            db?.close() // Ensure DB is closed on error
+          }
+        }
+      } catch /* jsonError */ {
+        // Ignore errors reading or parsing workspace.json
+        // spinner.warn(`Skipping workspace due to error reading/parsing ${workspaceJsonPath}: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+      }
+    }
+  } catch (readDirError) {
+    spinner.fail(`Error reading workspace storage directory: ${readDirError instanceof Error ? readDirError.message : String(readDirError)}`)
+    return null; // Return null if we can't even read the directory
+  }
+
+  if (!foundWorkspace && spinner.isSpinning) { // Check if still spinning (meaning not succeeded/failed/warned yet)
+    spinner.warn(`Workspace '${workspaceName}' metadata not found or no composer IDs extracted from associated database(s).`)
+  } else if (!foundWorkspace) {
+    // If it wasn't spinning, a message was already shown (e.g., .info())
+    // console.log(`Workspace '${workspaceName}' not found or no composer IDs extracted.`);
+  }
+
+
+  return foundWorkspace
 }
 
 // --- NEW HELPER: Process a single conversation entry --- 
 function processConversationEntry(rawData: RawConversationData): ConversationData | null {
+  console.log(`[Debug processConversationEntry] Processing raw data for composerId: ${rawData.composerId}`);
+  console.log(`[Debug processConversationEntry] Raw parsed JSON:
+${inspect(rawData, { colors: true, depth: 3 })}`); // Log raw structure
+
   const processedMessages: Message[] = []
+
+  if (!Array.isArray(rawData.conversation) || rawData.conversation.length === 0) {
+    console.log(`[Debug processConversationEntry] Skipping composerId ${rawData.composerId} due to empty or missing 'conversation' array.`);
+    return null;
+  }
 
   for (const item of rawData.conversation) {
     let role: 'assistant' | 'user' | null = null
@@ -417,6 +489,7 @@ function processConversationEntry(rawData: RawConversationData): ConversationDat
   }
 
   if (processedMessages.length === 0) {
+    console.log(`[Debug processConversationEntry] No processable messages found for composerId ${rawData.composerId} after iterating through ${rawData.conversation.length} items. Raw data was logged above.`);
     return null; // Skip conversations with no processable messages
   }
 
@@ -490,7 +563,6 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
         if (
           typeof parsedJson === 'object' && parsedJson !== null &&
           'composerId' in parsedJson && typeof (parsedJson as RawConversationData).composerId === 'string' &&
-          'conversation' in parsedJson && Array.isArray((parsedJson as RawConversationData).conversation) &&
           'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
         ) {
           const rawData = parsedJson as RawConversationData;
@@ -517,86 +589,222 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
 }
 
 /**
- * Gets conversations for a specific workspace.
+ * Retrieves conversations specifically for a given workspace name.
+ *
+ * @param workspaceName The name of the workspace.
+ * @returns A promise resolving to an array of workspace-specific conversations.
  */
 export async function getConversationsForWorkspace(workspaceName: string): Promise<ConversationData[]> {
-  const spinner = ora(`Finding conversations for workspace "${workspaceName}"...`).start()
-  const composerIds = getWorkspaceComposerIds(workspaceName);
-
-  if (composerIds.size === 0) {
-    spinner.info(`No composer IDs found for workspace "${workspaceName}".`);
+  const workspaceInfo = getWorkspaceInfo(workspaceName); // Use the refactored function
+  if (!workspaceInfo) {
     return [];
   }
 
-  spinner.text = `Found ${composerIds.size} composer IDs for workspace. Fetching conversations...`
-
-  const dbPath = getCursorDbPath()
-  if (!existsSync(dbPath)) {
-    spinner.fail('Global database not found.');
-    return []
-  }
-
-  let db: BetterSqlite3.Database | null = null;
-  const conversations: ConversationData[] = [];
-
-  try {
-    db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true });
-    const stmt = db.prepare("SELECT value FROM cursorDiskKV WHERE key = ?");
-
-    for (const id of composerIds) {
-      const key = `composerData:${id}`;
-      const row = stmt.get(key) as undefined | { value: Buffer };
-      if (row?.value) {
-        try {
-          const rawJson = row.value.toString('utf8');
-          const parsedJson = JSON.parse(rawJson) as unknown;
-          // Basic check before passing to detailed processor
-          if (
-            typeof parsedJson === 'object' && parsedJson !== null &&
-            'composerId' in parsedJson && typeof (parsedJson as RawConversationData).composerId === 'string' &&
-            'conversation' in parsedJson && Array.isArray((parsedJson as RawConversationData).conversation) &&
-            'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
-          ) {
-            const rawData = parsedJson as RawConversationData;
-            const processedData = processConversationEntry(rawData);
-            if (processedData) {
-              // Override workspace name/path with the one we searched for
-              processedData.workspaceName = workspaceName;
-              processedData.workspacePath = listWorkspaces().find(ws => ws.name === workspaceName)?.path || '';
-              conversations.push(processedData);
-            }
-          }
-        } catch {
-          // Ignore errors for individual entries
+  // 1. Try processing directly if raw JSON was found in ItemTable
+  if (workspaceInfo.rawConversationJson) {
+    try {
+      const rawData = JSON.parse(workspaceInfo.rawConversationJson) as RawConversationData;
+      console.log('[Debug getConversationsForWorkspace] Top-level keys in rawData:', Object.keys(rawData));
+      console.log('[Debug getConversationsForWorkspace] rawData:', rawData);
+      // If the parsed data has a top-level conversation array, process as before
+      if (typeof rawData === 'object' && rawData !== null && rawData.composerId && rawData.conversation) {
+        const processed = processConversationEntry(rawData);
+        if (processed) {
+          console.log("[Debug getConversationsForWorkspace] Successfully processed conversation from ItemTable JSON.")
+          return [processed]; // Return as an array
         }
+        console.log("[Debug getConversationsForWorkspace] processConversationEntry failed for ItemTable JSON.")
+      } else if (typeof rawData === 'object' && rawData !== null && Array.isArray((rawData as any).allComposers)) {
+        // If the data has an allComposers array, treat each as a conversation (even if only metadata)
+        const allComposers = (rawData as any).allComposers;
+        console.log(`[Debug getConversationsForWorkspace] allComposers branch entered. allComposers length: ${allComposers.length}`);
+        console.log(`[Debug getConversationsForWorkspace] allComposers content:`, allComposers);
+        const conversations: ConversationData[] = [];
+        for (const composer of allComposers) {
+          if (composer && typeof composer === 'object' && composer.composerId && composer.name) {
+            conversations.push({
+              composerId: composer.composerId,
+              createdAt: composer.createdAt || 0,
+              name: composer.name,
+              conversation: [], // No messages, just metadata
+              workspaceName: workspaceName,
+              workspacePath: undefined,
+              unifiedMode: composer.unifiedMode,
+              text: composer.text,
+            });
+          }
+        }
+        console.log(`[Debug getConversationsForWorkspace] conversations array after mapping allComposers:`, conversations);
+        if (conversations.length > 0) {
+          console.log(`[Debug getConversationsForWorkspace] Extracted ${conversations.length} conversations from allComposers in ItemTable (metadata only).`);
+          // Sort by createdAt descending
+          conversations.sort((a, b) => b.createdAt - a.createdAt);
+          return conversations;
+        }
+      } else {
+        console.warn("[Debug getConversationsForWorkspace] ItemTable JSON lacked expected structure (composerId/conversation or allComposers array).")
       }
+    } catch (error) {
+      console.error("[Debug getConversationsForWorkspace] Error parsing ItemTable JSON:", error);
     }
-
-    spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}".`);
-  } catch (error) {
-    spinner.fail(`Error fetching workspace conversations: ${error}`);
-  } finally {
-    db?.close();
   }
 
-  // Sort final result by creation date descending
-  conversations.sort((a, b) => b.createdAt - a.createdAt);
-  return conversations;
+  // 2. Fallback: If no direct JSON or processing failed, use composer IDs to query cursorDiskKV
+  if (workspaceInfo.composerIds.size > 0) {
+    console.log(`[Debug getConversationsForWorkspace] No direct conversation found or processed from ItemTable. Falling back to querying cursorDiskKV with ${workspaceInfo.composerIds.size} IDs.`);
+    return getConversationsByIds(workspaceInfo.composerIds, workspaceInfo.dbPath);
+  }
+
+  console.log("[Debug getConversationsForWorkspace] No composer IDs found, cannot query cursorDiskKV.");
+  return []; // No IDs, nothing to query
 }
 
 /**
- * Gets the latest conversation for a specific workspace.
+ * Gets the latest conversation specifically for a given workspace name.
+ *
+ * @param workspaceName The name of the workspace.
+ * @returns A promise resolving to the latest ConversationData for the workspace, or null.
  */
 export async function getLatestConversationForWorkspace(workspaceName: string): Promise<ConversationData | null> {
-  const conversations = await getConversationsForWorkspace(workspaceName);
-  // Already sorted by getConversationsForWorkspace
-  return conversations.length > 0 ? conversations[0] : null;
+  const workspaceInfo = getWorkspaceInfo(workspaceName); // Use the refactored function
+  if (!workspaceInfo) {
+    return null;
+  }
+
+  // 1. Try processing directly if raw JSON was found in ItemTable
+  if (workspaceInfo.rawConversationJson) {
+    try {
+      const rawData = JSON.parse(workspaceInfo.rawConversationJson) as RawConversationData;
+      // Ensure the parsed data has the expected top-level fields
+      if (typeof rawData === 'object' && rawData !== null && rawData.composerId && rawData.conversation) {
+        const processed = processConversationEntry(rawData);
+        if (processed) {
+          console.log("[Debug getLatestConversationForWorkspace] Successfully processed conversation from ItemTable JSON.")
+          return processed;
+        }
+
+        console.log("[Debug getLatestConversationForWorkspace] processConversationEntry failed for ItemTable JSON.")
+
+      } else {
+        console.warn("[Debug getLatestConversationForWorkspace] ItemTable JSON lacked expected structure (composerId/conversation).")
+      }
+    } catch (error) {
+      console.error("[Debug getLatestConversationForWorkspace] Error parsing ItemTable JSON:", error);
+    }
+  }
+
+  // 2. Fallback: If no direct JSON or processing failed, use composer IDs to query cursorDiskKV (limit 1)
+  if (workspaceInfo.composerIds.size > 0) {
+    console.log(`[Debug getLatestConversationForWorkspace] No direct conversation found or processed from ItemTable. Falling back to querying cursorDiskKV with ${workspaceInfo.composerIds.size} IDs (limit 1).`);
+    const conversations = await getConversationsByIds(workspaceInfo.composerIds, workspaceInfo.dbPath, 1);
+    return conversations.length > 0 ? conversations[0] : null;
+  }
+
+  console.log("[Debug getLatestConversationForWorkspace] No composer IDs found, cannot query cursorDiskKV.");
+  return null; // No IDs, nothing to query
+
 }
 
-// --- Global Latest Function --- 
+/**
+ * Gets the latest conversation from the global database.
+ */
 export async function getLatestConversation(): Promise<ConversationData | null> {
   // console.warn("getLatestConversation might need refactoring if used independently, uses extractGlobalConversations which is now refactored.");
   // Use the limit parameter for efficiency
   const conversations = await extractGlobalConversations(1);
   return conversations.length > 0 ? conversations[0] : null;
+}
+
+/**
+ * Extracts conversations associated with specific composer IDs from a given database path.
+ * Uses the 'conversationService.conversation' key format found in newer Cursor versions.
+ *
+ * @param composerIds A Set of composer IDs to filter by.
+ * @param dbPath The path to the SQLite database file (either global or workspace-specific).
+ * @param limit Optional limit on the number of conversations to return.
+ * @returns A promise that resolves to an array of ConversationData.
+ */
+export async function getConversationsByIds(composerIds: Set<string>, dbPath: string, limit?: number): Promise<ConversationData[]> {
+  if (composerIds.size === 0) {
+    return []
+  }
+
+  const spinner = ora(`Extracting conversations from ${basename(dbPath)} using ${composerIds.size} IDs...`).start()
+  let db: BetterSqlite3.Database | null = null;
+  const conversations: ConversationData[] = []
+
+  try {
+    if (!existsSync(dbPath)) {
+      spinner.fail(`Database file not found at ${dbPath}`);
+      return [];
+    }
+
+    db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
+
+    // Query cursorDiskKV using the composer IDs
+    const baseSql = "SELECT key, value FROM cursorDiskKV WHERE key = ?";
+    const stmt = db.prepare(baseSql);
+    let retrievedCount = 0;
+
+    // Iterate through IDs and query individually, applying limit if necessary
+    const sortedIds = [...composerIds].sort().reverse(); // Attempt latest first heuristic
+    for (const id of sortedIds) {
+      if (limit && retrievedCount >= limit) {
+        break; // Stop if limit is reached
+      }
+
+      const key = `composerData:${id}`;
+      const row = stmt.get(key) as undefined | { key: string, value: Buffer };
+
+      if (row?.value) {
+        retrievedCount++;
+        try {
+          const rawJson = row.value.toString('utf8');
+          const parsedJson = JSON.parse(rawJson) as unknown;
+          // Perform the same type check as in extractGlobalConversations
+          if (
+            typeof parsedJson === 'object' && parsedJson !== null &&
+            'composerId' in parsedJson && typeof (parsedJson as RawConversationData).composerId === 'string' &&
+            'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
+          ) {
+            const rawData = parsedJson as RawConversationData;
+            // Ensure the composerId matches the one we queried for (sanity check)
+            if (rawData.composerId === id) {
+              const processedData = processConversationEntry(rawData);
+              if (processedData) {
+                // Add workspace info if missing (useful if called directly)
+                if (!processedData.workspaceName || !processedData.workspacePath) {
+                  const wsInfo = findWorkspaceInfo(processedData.composerId);
+                  processedData.workspaceName = wsInfo.name;
+                  processedData.workspacePath = wsInfo.path;
+                }
+
+                conversations.push(processedData);
+              }
+            }
+          }
+        } catch (error) {
+          spinner.warn(`
+Error parsing conversation row for key ${key} in ${basename(dbPath)}: ${error instanceof Error ? error.message : String(error)}`);
+          // console.error('Problematic row data:', inspect(row.value?.toString('utf8').slice(0, 500), { depth: 2 }));
+        }
+      }
+    }
+
+    spinner.succeed(`Successfully processed ${conversations.length} conversations from ${basename(dbPath)} (checked ${composerIds.size} IDs).`)
+  } catch (error) {
+    // Check for specific error: no such table: cursorDiskKV
+    if (error instanceof Error && error.message.includes('no such table: cursorDiskKV')) {
+      spinner.warn(`Table 'cursorDiskKV' not found in ${basename(dbPath)}. Workspace conversations might be stored differently or this DB is older.`);
+    } else {
+      spinner.fail(`Error accessing database at ${dbPath}: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(error);
+    }
+  } finally {
+    db?.close()
+  }
+
+  // Sort final result by creation date descending (important as we fetch individually)
+  conversations.sort((a, b) => b.createdAt - a.createdAt);
+  return conversations;
 }

@@ -16,7 +16,8 @@
     "clipboardy": "^4.0.0",
     "conf": "^13.1.0",
     "ora": "^8.2.0",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "tsx": "^4.19.3"
   },
   "devDependencies": {
     "@eslint/compat": "^1",
@@ -89,6 +90,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3",
+      "esbuild",
       "sqlite3"
     ],
     "peerDependencyRules": {
