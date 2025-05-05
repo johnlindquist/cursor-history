@@ -4,35 +4,6 @@
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
     "@semantic-release/npm",
-    [
-      "@semantic-release/github",
-      {
-        "assets": [
-          "bin/run.js",
-          "bin/dev.js",
-          "bin/run.cmd",
-          "bin/dev.cmd",
-          "dist/index.js",
-          "dist/index.d.ts",
-          "dist/types.js",
-          "dist/types.d.ts",
-          "dist/debug-conversations.js",
-          "dist/debug-conversations.d.ts",
-          "dist/debug-metadata.js",
-          "dist/debug-metadata.d.ts",
-          "dist/debug-timestamps.js",
-          "dist/debug-timestamps.d.ts",
-          "dist/commands/extract/index.js",
-          "dist/commands/extract/index.d.ts",
-          "dist/db/extract-conversations.js",
-          "dist/db/extract-conversations.d.ts",
-          "dist/utils/formatting.js",
-          "dist/utils/formatting.d.ts",
-          "dist/utils/config.js",
-          "dist/utils/config.d.ts",
-          "oclif.manifest.json"
-        ]
-      }
-    ]
+    ["@semantic-release/github", {}]
   ]
 }
