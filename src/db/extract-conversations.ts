@@ -1,9 +1,9 @@
-import BetterSqlite3 from 'better-sqlite3'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { platform } from 'node:os'
 import { basename, join } from 'node:path'
 import { inspect } from 'node:util'
 import ora from 'ora'
+import { execSync } from 'node:child_process'
 
 import type {
   CodeBlock,
@@ -193,7 +193,8 @@ function decodeWorkspacePath(uri: string): string {
   }
 }
 
-function findWorkspaceInfo(composerId: string): { name?: string; path?: string } {
+// Make findWorkspaceInfo async and use 'await getBetterSqlite3()'
+async function findWorkspaceInfo(composerId: string): Promise<{ name?: string; path?: string }> {
   const workspaceStoragePath = getWorkspaceStoragePath()
   if (!existsSync(workspaceStoragePath)) return {}
 
@@ -205,10 +206,11 @@ function findWorkspaceInfo(composerId: string): { name?: string; path?: string }
     const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb')
     if (!existsSync(dbPath)) continue
 
-    let db: BetterSqlite3.Database | null = null;
+    let db: import('better-sqlite3').Database | null = null;
     try {
+      const BetterSqlite3 = await getBetterSqlite3();
       db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
-      const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
+      const result = db!.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as
         | undefined
         | { value: string }
 
@@ -228,7 +230,7 @@ function findWorkspaceInfo(composerId: string): { name?: string; path?: string }
             const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
             if (workspaceData.folder) {
               const path = decodeWorkspacePath(workspaceData.folder)
-              db.close() // Close DB before returning
+              db!.close() // Close DB before returning
               return {
                 name: basename(path),
                 path,
@@ -240,186 +242,15 @@ function findWorkspaceInfo(composerId: string): { name?: string; path?: string }
     } catch (error) {
       console.error(`Error reading workspace DB ${dbPath}:`, error)
     } finally {
-      db?.close()
+      if (db) db.close()
     }
   }
 
   return {}
 }
 
-// --- Utility Functions --- 
-// Ensure listWorkspaces is exported
-/**
- * Lists all available workspaces.
- * @returns An array of workspace objects with name and path properties
- */
-export function listWorkspaces(): Array<{ id: string; name: string; path: string; }> {
-  const workspaceStoragePath = getWorkspaceStoragePath()
-  if (!existsSync(workspaceStoragePath)) return []
-
-  const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-  const result: Array<{ id: string; name: string; path: string; }> = []
-
-  for (const workspace of workspaces) {
-    if (!workspace.isDirectory()) continue
-
-    const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
-    if (!existsSync(workspaceJsonPath)) continue
-
-    try {
-      const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
-      if (workspaceData.folder) {
-        const path = decodeWorkspacePath(workspaceData.folder)
-        const name = basename(path)
-        result.push({
-          id: workspace.name,
-          name,
-          path,
-        })
-      }
-    } catch (error) {
-      console.error(`Error reading workspace ${workspace.name}:`, error)
-    }
-  }
-
-  return result
-}
-
-/**
- * Finds workspace subdirectories matching the given name and extracts
- * composer IDs and the database path from their respective state.vscdb files.
- *
- * @param workspaceName The base name of the workspace directory to find.
- * @returns An object containing the set of composer IDs and the path to the specific workspace database, or null if not found.
- */
-function getWorkspaceInfo(workspaceName: string): null | { composerIds: Set<string>; dbPath: string; rawConversationJson?: string } {
-  const workspaceStoragePath = getWorkspaceStoragePath()
-  if (!existsSync(workspaceStoragePath)) {
-    console.warn(`Workspace storage path not found: ${workspaceStoragePath}`)
-    return null; // Return null if we can't even read the directory
-  }
-
-  let foundWorkspace: null | { composerIds: Set<string>; dbPath: string; rawConversationJson?: string } = null;
-  const spinner = ora(`Searching for workspace '${workspaceName}' metadata`).start()
-
-  try {
-    const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-
-    for (const workspace of workspaces) {
-      if (!workspace.isDirectory()) continue
-
-      const workspaceDirPath = join(workspaceStoragePath, workspace.name)
-      const workspaceJsonPath = join(workspaceDirPath, 'workspace.json')
-      const dbPath = join(workspaceDirPath, 'state.vscdb')
-
-      // Check if workspace.json and state.vscdb exist
-      if (!existsSync(workspaceJsonPath) || !existsSync(dbPath)) {
-        continue
-      }
-
-      try {
-        const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8')) as {
-          folder?: string
-          id?: string
-          // Other potential properties
-        }
-
-        if (!workspaceData.folder) continue
-
-        const decodedPath = decodeWorkspacePath(workspaceData.folder)
-        const currentWorkspaceBaseName = basename(decodedPath)
-
-        // Compare base names
-        if (currentWorkspaceBaseName === workspaceName) {
-          spinner.text = `Found matching workspace metadata for '${workspaceName}'. Reading database ${basename(dbPath)}...`
-          // Found the matching workspace, now extract composer IDs from its DB
-          let db: BetterSqlite3.Database | null = null;
-          const composerIds = new Set<string>();
-          let potentialRawJson: string | undefined; // Variable to store potential JSON
-          try {
-            db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
-            // Query for keys that store composer data.
-            // This query assumes composer IDs are stored within a JSON value under the key 'composer.composerData' or related keys.
-            const results = db
-              .prepare("SELECT value FROM ItemTable WHERE key LIKE '%composer.composerData%' OR key LIKE '%workbench.editors.textResourceEditor%'") // Broaden search
-              .all() as Array<{ value: string }>
-
-            let foundIdsInThisDb = false;
-            for (const row of results) {
-              try {
-                const data = JSON.parse(row.value) as unknown
-                // Look for composer IDs in various possible structures
-                if (typeof data === 'object' && data !== null) {
-                  // Prioritize finding 'allComposers' structure first
-                  if ('allComposers' in data && Array.isArray(data.allComposers)) {
-                    for (const composer of data.allComposers) {
-                      if (typeof composer === 'object' && composer !== null && 'composerId' in composer && typeof composer.composerId === 'string') {
-                        composerIds.add(composer.composerId)
-                        foundIdsInThisDb = true;
-                      }
-                    }
-                    // Always set potentialRawJson if allComposers is present
-                    potentialRawJson = row.value;
-                  } else if ('composerId' in data && typeof data.composerId === 'string') {
-                    // Handle case where composerId is directly in the parsed object
-                    composerIds.add(data.composerId);
-                    foundIdsInThisDb = true;
-                    // Check if this simpler structure also contains the conversation array
-                    if ('conversation' in data && Array.isArray(data.conversation)) {
-                      potentialRawJson = row.value; // Store the raw JSON string
-                      // console.log(`[Debug getWorkspaceInfo] Found potential conversation JSON in ItemTable row (direct composerId structure)`);
-                    }
-                  }
-                  // Add more checks for different potential structures if needed (e.g., editor history)
-                }
-              } catch /* jsonError */ {
-                // Ignore entries that are not valid JSON or don't match expected structures
-                // console.warn(`Skipping non-JSON or unexpected structure in row for key in ${dbPath}:`, jsonError);
-              }
-
-              // If we found potential JSON, stop processing more rows for this DB
-              if (potentialRawJson) break;
-            }
-
-            db.close() // Close DB after successful query
-
-            if (foundIdsInThisDb) { // Use the flag set inside the loop
-              spinner.succeed(`Found ${composerIds.size} potential composer IDs in workspace '${workspaceName}' database (${basename(dbPath)}). ${potentialRawJson ? 'Found potential conversation data directly.' : 'Direct conversation data not found in ItemTable.'}`)
-              // Include the potentialRawJson in the return object
-              foundWorkspace = { composerIds, dbPath, rawConversationJson: potentialRawJson };
-              break; // Stop searching workspace directories once found
-            } else {
-              spinner.info(`Workspace '${workspaceName}' database (${basename(dbPath)}) found, but no composer IDs extracted.`)
-            }
-
-          } catch (dbError) {
-            spinner.fail(`Error reading workspace DB ${dbPath}: ${dbError instanceof Error ? dbError.message : String(dbError)}`)
-            db?.close() // Ensure DB is closed on error
-          }
-        }
-      } catch /* jsonError */ {
-        // Ignore errors reading or parsing workspace.json
-        // spinner.warn(`Skipping workspace due to error reading/parsing ${workspaceJsonPath}: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
-      }
-    }
-  } catch (readDirError) {
-    spinner.fail(`Error reading workspace storage directory: ${readDirError instanceof Error ? readDirError.message : String(readDirError)}`)
-    return null; // Return null if we can't even read the directory
-  }
-
-  if (!foundWorkspace && spinner.isSpinning) { // Check if still spinning (meaning not succeeded/failed/warned yet)
-    spinner.warn(`Workspace '${workspaceName}' metadata not found or no composer IDs extracted from associated database(s).`)
-  } else if (!foundWorkspace) {
-    // If it wasn't spinning, a message was already shown (e.g., .info())
-    // console.log(`Workspace '${workspaceName}' not found or no composer IDs extracted.`);
-  }
-
-
-  return foundWorkspace
-}
-
 // --- NEW HELPER: Process a single conversation entry --- 
-function processConversationEntry(rawData: RawConversationData): ConversationData | null {
+async function processConversationEntry(rawData: RawConversationData): Promise<ConversationData | null> {
   console.log(`[Debug processConversationEntry] Processing raw data for composerId: ${rawData.composerId}`);
   console.log(`[Debug processConversationEntry] Raw parsed JSON:
 ${inspect(rawData, { colors: true, depth: 3 })}`); // Log raw structure
@@ -494,7 +325,7 @@ ${inspect(rawData, { colors: true, depth: 3 })}`); // Log raw structure
   }
 
   // Find workspace info (this is slightly redundant here, but adds path if found)
-  const workspaceInfo = findWorkspaceInfo(rawData.composerId)
+  const workspaceInfo = await findWorkspaceInfo(rawData.composerId)
   const conversationData: ConversationData = {
     composerId: rawData.composerId,
     conversation: processedMessages,
@@ -523,13 +354,13 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
   }
 
   const spinner = ora('Extracting global conversations...').start()
-  let db: BetterSqlite3.Database | null = null
+  const BetterSqlite3 = await getBetterSqlite3();
+  let db: import('better-sqlite3').Database | null = null;
   const conversations: ConversationData[] = []
 
   try {
-    db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
-
-    let rows: { key: string; value: Buffer }[];
+    db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true });
+    let rows: { key: string; value: Buffer }[] = [];
 
     // Prepare and execute different queries based on limit
     if (limit) {
@@ -566,7 +397,7 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
           'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
         ) {
           const rawData = parsedJson as RawConversationData;
-          const processedData = processConversationEntry(rawData);
+          const processedData = await processConversationEntry(rawData);
           if (processedData) {
             conversations.push(processedData);
           }
@@ -580,7 +411,7 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
   } catch (error) {
     spinner.fail(`Failed to extract conversations: ${error}`)
   } finally {
-    db?.close()
+    if (db) db.close();
   }
 
   // Sort final result by creation date descending
@@ -595,7 +426,7 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
  * @returns A promise resolving to an array of workspace-specific conversations.
  */
 export async function getConversationsForWorkspace(workspaceName: string): Promise<ConversationData[]> {
-  const workspaceInfo = getWorkspaceInfo(workspaceName); // Use the refactored function
+  const workspaceInfo = await getWorkspaceInfo(workspaceName); // Use the refactored function
   if (!workspaceInfo) {
     return [];
   }
@@ -608,7 +439,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
       console.log('[Debug getConversationsForWorkspace] rawData:', rawData);
       // If the parsed data has a top-level conversation array, process as before
       if (typeof rawData === 'object' && rawData !== null && rawData.composerId && rawData.conversation) {
-        const processed = processConversationEntry(rawData);
+        const processed = await processConversationEntry(rawData);
         if (processed) {
           console.log("[Debug getConversationsForWorkspace] Successfully processed conversation from ItemTable JSON.")
           return [processed]; // Return as an array
@@ -666,7 +497,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
  * @returns A promise resolving to the latest ConversationData for the workspace, or null.
  */
 export async function getLatestConversationForWorkspace(workspaceName: string): Promise<ConversationData | null> {
-  const workspaceInfo = getWorkspaceInfo(workspaceName); // Use the refactored function
+  const workspaceInfo = await getWorkspaceInfo(workspaceName); // Use the refactored function
   if (!workspaceInfo) {
     return null;
   }
@@ -677,7 +508,7 @@ export async function getLatestConversationForWorkspace(workspaceName: string): 
       const rawData = JSON.parse(workspaceInfo.rawConversationJson) as RawConversationData;
       // Ensure the parsed data has the expected top-level fields
       if (typeof rawData === 'object' && rawData !== null && rawData.composerId && rawData.conversation) {
-        const processed = processConversationEntry(rawData);
+        const processed = await processConversationEntry(rawData);
         if (processed) {
           console.log("[Debug getLatestConversationForWorkspace] Successfully processed conversation from ItemTable JSON.")
           return processed;
@@ -730,7 +561,8 @@ export async function getConversationsByIds(composerIds: Set<string>, dbPath: st
   }
 
   const spinner = ora(`Extracting conversations from ${basename(dbPath)} using ${composerIds.size} IDs...`).start()
-  let db: BetterSqlite3.Database | null = null;
+  const BetterSqlite3 = await getBetterSqlite3();
+  let db: import('better-sqlite3').Database | null = null;
   const conversations: ConversationData[] = []
 
   try {
@@ -739,7 +571,7 @@ export async function getConversationsByIds(composerIds: Set<string>, dbPath: st
       return [];
     }
 
-    db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
+    db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true });
 
     // Query cursorDiskKV using the composer IDs
     const baseSql = "SELECT key, value FROM cursorDiskKV WHERE key = ?";
@@ -770,11 +602,11 @@ export async function getConversationsByIds(composerIds: Set<string>, dbPath: st
             const rawData = parsedJson as RawConversationData;
             // Ensure the composerId matches the one we queried for (sanity check)
             if (rawData.composerId === id) {
-              const processedData = processConversationEntry(rawData);
+              const processedData = await processConversationEntry(rawData);
               if (processedData) {
                 // Add workspace info if missing (useful if called directly)
                 if (!processedData.workspaceName || !processedData.workspacePath) {
-                  const wsInfo = findWorkspaceInfo(processedData.composerId);
+                  const wsInfo = await findWorkspaceInfo(processedData.composerId);
                   processedData.workspaceName = wsInfo.name;
                   processedData.workspacePath = wsInfo.path;
                 }
@@ -784,8 +616,7 @@ export async function getConversationsByIds(composerIds: Set<string>, dbPath: st
             }
           }
         } catch (error) {
-          spinner.warn(`
-Error parsing conversation row for key ${key} in ${basename(dbPath)}: ${error instanceof Error ? error.message : String(error)}`);
+          spinner.warn(`\nError parsing conversation row for key ${key} in ${basename(dbPath)}: ${error instanceof Error ? error.message : String(error)}`);
           // console.error('Problematic row data:', inspect(row.value?.toString('utf8').slice(0, 500), { depth: 2 }));
         }
       }
@@ -801,10 +632,95 @@ Error parsing conversation row for key ${key} in ${basename(dbPath)}: ${error in
       console.error(error);
     }
   } finally {
-    db?.close()
+    if (db) db.close();
   }
 
   // Sort final result by creation date descending (important as we fetch individually)
   conversations.sort((a, b) => b.createdAt - a.createdAt);
   return conversations;
+}
+
+// --- Robust BetterSqlite3 Loader (ESM-compatible, async) ---
+let BetterSqlite3: typeof import('better-sqlite3') | undefined;
+
+async function tryLoadBetterSqlite3(): Promise<typeof import('better-sqlite3')> {
+  let pkgMgr = 'pnpm';
+  try {
+    return (await import('better-sqlite3')).default;
+  } catch (error: any) {
+    const msg = String(error?.message || error);
+    if (msg.includes('NODE_MODULE_VERSION')) {
+      // Native module version mismatch detected
+      console.error('\u001b[31mNative module version mismatch detected for better-sqlite3.\u001b[0m');
+      console.error('This usually happens after upgrading Node.js or installing the CLI globally under a different Node version.');
+      console.error('Attempting to rebuild better-sqlite3 for your current Node.js version...');
+      try {
+        if (existsSync('yarn.lock')) pkgMgr = 'yarn';
+        else if (existsSync('package-lock.json')) pkgMgr = 'npm';
+        if (pkgMgr === 'pnpm') {
+          execSync('pnpm rebuild better-sqlite3', { stdio: 'inherit' });
+        } else if (pkgMgr === 'yarn') {
+          execSync('yarn add better-sqlite3 --force', { stdio: 'inherit' });
+        } else {
+          execSync('npm rebuild better-sqlite3', { stdio: 'inherit' });
+        }
+        // Try again
+        return (await import('better-sqlite3')).default;
+      } catch (rebuildError) {
+        const globalDir = getGlobalInstallDir();
+        console.error('\u001b[31mFailed to rebuild better-sqlite3.\u001b[0m');
+        console.error('Please run the following command in your global install directory:');
+        if (globalDir) {
+          console.error(`  cd ${globalDir}`);
+        }
+        if (pkgMgr === 'pnpm') {
+          console.error('  pnpm rebuild better-sqlite3');
+        } else if (pkgMgr === 'yarn') {
+          console.error('  yarn add better-sqlite3 --force');
+        } else {
+          console.error('  npm rebuild better-sqlite3');
+        }
+        console.error('Then re-run this command.');
+        throw new Error('better-sqlite3 native module version mismatch. See above for instructions.');
+      }
+    } else {
+      // Other error
+      console.error('\u001b[31mFailed to load better-sqlite3:\u001b[0m', error);
+      throw error;
+    }
+  }
+}
+
+export async function getBetterSqlite3(): Promise<typeof import('better-sqlite3')> {
+  if (!BetterSqlite3) {
+    BetterSqlite3 = await tryLoadBetterSqlite3();
+  }
+  return BetterSqlite3;
+}
+
+function getGlobalInstallDir(): string | undefined {
+  // Try to detect the global install directory for pnpm, npm, or yarn
+  // This is best effort and may not always be correct
+  try {
+    if (process.env.PNPM_HOME) return process.env.PNPM_HOME;
+    if (process.env.npm_config_prefix) return process.env.npm_config_prefix;
+    if (process.env.YARN_GLOBAL_FOLDER) return process.env.YARN_GLOBAL_FOLDER;
+    // Fallback: use 'npm root -g'
+    const { execSync } = require('node:child_process');
+    return execSync('npm root -g').toString().trim();
+  } catch {
+    return undefined;
+  }
+}
+
+export async function getWorkspaceInfo(workspaceName: string): Promise<null | { composerIds: Set<string>; dbPath: string; rawConversationJson?: string }> {
+  // Implementation of getWorkspaceInfo function
+  // This is a placeholder and should be replaced with the actual implementation
+  return null;
+}
+
+export function listWorkspaces(): Array<{ id: string; name: string; path: string; }> {
+  // Implementation of listWorkspaces function
+  // This is a placeholder and should be replaced with the actual implementation
+  return [];
 }
