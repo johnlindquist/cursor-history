@@ -358,110 +358,118 @@ export default class CursorHistory extends Command {
    * filter the list to only show conversations from that workspace.
    */
   private async selectWorkspaceAndConversation(): Promise<void> {
-    // Get list of workspaces
-    const workspaces = listWorkspaces()
+    try {
+      // Get list of workspaces
+      const workspaces = listWorkspaces()
 
-    if (workspaces.length === 0) {
-      this.log('No workspaces found.')
-      return
-    }
-
-    this.log(`Found ${workspaces.length} workspaces.`)
-
-    // Check for workspace flag
-    const { flags } = await this.parse(CursorHistory)
-    let workspaceNameToUse: string | undefined
-    let selectedWorkspace: undefined | { id: string; name: string; path: string; }
-
-    if (flags.workspace) {
-      // Use the workspace flag directly
-      workspaceNameToUse = flags.workspace
-      selectedWorkspace = workspaces.find(ws => flags.workspace && ws.name.toLowerCase() === flags.workspace.toLowerCase())
-      if (!selectedWorkspace) {
-        this.log(`Workspace '${flags.workspace}' not found.`)
+      if (workspaces.length === 0) {
+        this.log('No workspaces found.')
         return
       }
-      this.log(`Using workspace from flag: ${flags.workspace}`)
-    } else {
-      // Get current directory name to use as workspace filter
-      const currentDirName = basename(process.cwd())
-      this.log(`Current directory: ${currentDirName}`)
 
-      // Check if current directory matches a workspace
-      const matchingWorkspace = workspaces.find((ws: { id: string; name: string; path: string; }) =>
-        ws.name.toLowerCase() === currentDirName.toLowerCase()
-      )
+      this.log(`Found ${workspaces.length} workspaces.`)
 
-      if (matchingWorkspace) {
-        this.log(`Current directory matches workspace: ${matchingWorkspace.name}`)
-        selectedWorkspace = matchingWorkspace
-        workspaceNameToUse = currentDirName
-      } else {
-        // Otherwise, allow selecting a workspace
-        selectedWorkspace = await search({
-          message: 'Select a workspace:',
-          async source(term) {
-            const termLower = term?.toLowerCase() || ''
-            return workspaces
-              .filter((ws: { id: string; name: string; path: string; }) =>
-                !term || ws.name.toLowerCase().includes(termLower)
-              )
-              .map((ws: { id: string; name: string; path: string; }) => ({
-                description: ws.path,
-                name: ws.name,
-                value: ws,
-              }))
-          },
-        })
+      // Check for workspace flag
+      const { flags } = await this.parse(CursorHistory)
+      let workspaceNameToUse: string | undefined
+      let selectedWorkspace: undefined | { id: string; name: string; path: string; }
+
+      if (flags.workspace) {
+        // Use the workspace flag directly
+        workspaceNameToUse = flags.workspace
+        selectedWorkspace = workspaces.find(ws => flags.workspace && ws.name.toLowerCase() === flags.workspace.toLowerCase())
         if (!selectedWorkspace) {
-          this.log('No workspace selected.')
+          this.log(`Workspace '${flags.workspace}' not found.`)
           return
         }
-        workspaceNameToUse = selectedWorkspace.name
-      }
-    }
+        this.log(`Using workspace from flag: ${flags.workspace}`)
+      } else {
+        // Get current directory name to use as workspace filter
+        const currentDirName = basename(process.cwd())
+        this.log(`Current directory: ${currentDirName}`)
 
-    this.log(`Selected workspace: ${selectedWorkspace.name}`)
-    this.log(`Using workspace name: ${workspaceNameToUse} for conversation lookup`)
-    const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse)
+        // Check if current directory matches a workspace
+        const matchingWorkspace = workspaces.find((ws: { id: string; name: string; path: string; }) =>
+          ws.name.toLowerCase() === currentDirName.toLowerCase()
+        )
 
-    if (workspaceConversations.length === 0) {
-      this.log(`No conversations found for workspace: ${selectedWorkspace.name}`)
-      return
-    }
-
-    this.log(`Found ${workspaceConversations.length} conversations for workspace: ${selectedWorkspace.name}`)
-
-    // Allow selecting a conversation
-    const selectedConversation = await search({
-      message: 'Select a conversation:',
-      source: async (term) => {
-        const termLower = term?.toLowerCase() || ''
-        return workspaceConversations
-          .filter(conv => {
-            // Always include metadata-only conversations (empty conversation array)
-            if (conv.conversation.length === 0) {
-              return !term || (conv.name?.toLowerCase().includes(termLower) || conv.text?.toLowerCase().includes(termLower));
-            }
-            // Otherwise, filter as before
-            return !term ||
-              (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
-              (conv.text?.toLowerCase() || '').includes(termLower)
+        if (matchingWorkspace) {
+          this.log(`Current directory matches workspace: ${matchingWorkspace.name}`)
+          selectedWorkspace = matchingWorkspace
+          workspaceNameToUse = currentDirName
+        } else {
+          // Otherwise, allow selecting a workspace
+          selectedWorkspace = await search({
+            message: 'Select a workspace:',
+            async source(term) {
+              const termLower = term?.toLowerCase() || ''
+              return workspaces
+                .filter((ws: { id: string; name: string; path: string; }) =>
+                  !term || ws.name.toLowerCase().includes(termLower)
+                )
+                .map((ws: { id: string; name: string; path: string; }) => ({
+                  description: ws.path,
+                  name: ws.name,
+                  value: ws,
+                }))
+            },
           })
-          .map(conv => ({
-            description: new Date(conv.createdAt).toLocaleString(),
-            name: this.getDisplayName(conv),
-            value: conv,
-          }))
-      },
-    })
+          if (!selectedWorkspace) {
+            this.log('No workspace selected.')
+            return
+          }
+          workspaceNameToUse = selectedWorkspace.name
+        }
+      }
 
-    if (!selectedConversation) {
-      this.log('No conversation selected.')
-      return
+      this.log(`Selected workspace: ${selectedWorkspace.name}`)
+      this.log(`Using workspace name: ${workspaceNameToUse} for conversation lookup`)
+      const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse)
+
+      if (workspaceConversations.length === 0) {
+        this.log(`No conversations found for workspace: ${selectedWorkspace.name}`)
+        return
+      }
+
+      this.log(`Found ${workspaceConversations.length} conversations for workspace: ${selectedWorkspace.name}`)
+
+      // Allow selecting a conversation
+      const selectedConversation = await search({
+        message: 'Select a conversation:',
+        source: async (term) => {
+          const termLower = term?.toLowerCase() || ''
+          return workspaceConversations
+            .filter(conv => {
+              // Always include metadata-only conversations (empty conversation array)
+              if (conv.conversation.length === 0) {
+                return !term || (conv.name?.toLowerCase().includes(termLower) || conv.text?.toLowerCase().includes(termLower));
+              }
+              // Otherwise, filter as before
+              return !term ||
+                (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
+                (conv.text?.toLowerCase() || '').includes(termLower)
+            })
+            .map(conv => ({
+              description: new Date(conv.createdAt).toLocaleString(),
+              name: this.getDisplayName(conv),
+              value: conv,
+            }))
+        },
+      })
+
+      if (!selectedConversation) {
+        this.log('No conversation selected.')
+        return
+      }
+
+      // Export the selected conversation
+      await this.exportConversation(selectedConversation)
+    } catch (err: any) {
+      if (err && err.name === 'ExitPromptError') {
+        this.log('Prompt exited by user. No selection was made.')
+        return
+      }
+      throw err
     }
-
-    // Export the selected conversation
-    await this.exportConversation(selectedConversation)
   }
 }
