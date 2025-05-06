@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import os, { platform } from 'node:os';
 import path, { join } from 'node:path';
 import { inspect } from 'node:util'; // Import inspect
+import { readdirSync, readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 
 // Configuration
 const targetKeys = [
@@ -252,4 +254,143 @@ async function main() { // Wrap in async function
 main().catch(finalError => {
     console.error("Script finished with an error:", finalError);
     process.exitCode = 1;
-}); 
+});
+
+// --- Diagnostic: Print context and fileSelections for all composerData entries for a workspace ---
+
+function getWorkspaceStoragePath(): string {
+    const os = platform();
+    const home = os.homedir();
+    switch (os.platform()) {
+        case 'darwin':
+            return join(home, 'Library/Application Support/Cursor/User/workspaceStorage');
+        case 'linux':
+            return join(home, '.config/Cursor/User/workspaceStorage');
+        case 'win32':
+            return join(process.env.APPDATA || join(home, 'AppData/Roaming'), 'Cursor/User/workspaceStorage');
+        default:
+            throw new Error(`Unsupported platform: ${os}`);
+    }
+}
+
+function decodeWorkspacePath(uri: string): string {
+    try {
+        const path = uri.replace(/^file:\/\//, '');
+        return decodeURIComponent(path);
+    } catch (error) {
+        console.error('Failed to decode workspace path:', error);
+        return uri;
+    }
+}
+
+function getWorkspaceComposerIds(workspaceName: string): Set<string> {
+    const composerIds = new Set<string>();
+    const workspaceStoragePath = getWorkspaceStoragePath();
+    const nameLower = workspaceName.toLowerCase();
+    try {
+        const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true });
+        for (const workspace of workspaces) {
+            if (!workspace.isDirectory()) continue;
+            const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json');
+            if (!existsSync(workspaceJsonPath)) continue;
+            let workspacePath = '';
+            let currentWorkspaceName = '';
+            try {
+                const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'));
+                if (workspaceData.folder) {
+                    workspacePath = decodeWorkspacePath(workspaceData.folder);
+                    currentWorkspaceName = basename(workspacePath);
+                } else {
+                    continue;
+                }
+            } catch {
+                continue;
+            }
+            if (currentWorkspaceName.toLowerCase() !== nameLower && !workspacePath.toLowerCase().includes(nameLower)) {
+                continue;
+            }
+            const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb');
+            if (!existsSync(dbPath)) continue;
+            let db: Database.Database | null = null;
+            try {
+                db = new Database(dbPath, { fileMustExist: true, readonly: true });
+                const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as undefined | { value: string };
+                if (result?.value) {
+                    const parsed = JSON.parse(result.value);
+                    if (typeof parsed === 'object' && parsed !== null && 'allComposers' in parsed && Array.isArray(parsed.allComposers)) {
+                        for (const composer of parsed.allComposers) {
+                            if (typeof composer === 'object' && composer !== null && 'composerId' in composer && typeof composer.composerId === 'string') {
+                                composerIds.add(composer.composerId);
+                            }
+                        }
+                    }
+                }
+            } catch {
+            } finally {
+                db?.close();
+            }
+        }
+    } catch { }
+    return composerIds;
+}
+
+function printComposerContextsForWorkspace(workspaceName: string) {
+    const composerIds = getWorkspaceComposerIds(workspaceName);
+    if (composerIds.size === 0) {
+        console.log(`[DIAG] No composer IDs found for workspace: ${workspaceName}`);
+        return;
+    }
+    const dbPath = getDatabasePath();
+    let db: Database.Database | null = null;
+    try {
+        db = new Database(dbPath, { fileMustExist: true, readonly: true });
+        const stmt = db.prepare('SELECT key, value FROM cursorDiskKV WHERE key = ?');
+        for (const id of composerIds) {
+            const key = `composerData:${id}`;
+            const row = stmt.get(key) as undefined | { key: string; value: Buffer };
+            if (row && row.value) {
+                let rawValue: string | undefined;
+                try {
+                    rawValue = row.value.toString('utf8');
+                    const data = JSON.parse(rawValue);
+                    console.log(`\n[DIAG] composerId: ${id}`);
+                    if ('context' in data) {
+                        console.log(`[DIAG]   context: ${inspect(data.context, { depth: 3 })}`);
+                    } else {
+                        console.log(`[DIAG]   context: <none>`);
+                    }
+                    if ('fileSelections' in data) {
+                        console.log(`[DIAG]   fileSelections: ${inspect(data.fileSelections, { depth: 3 })}`);
+                    } else {
+                        console.log(`[DIAG]   fileSelections: <none>`);
+                    }
+                    if ('conversation' in data && Array.isArray(data.conversation)) {
+                        console.log(`[DIAG]   conversation.length: ${data.conversation.length}`);
+                    } else {
+                        console.log(`[DIAG]   conversation: <none>`);
+                    }
+                } catch (err) {
+                    console.log(`[DIAG]   Error parsing composerData for ${id}:`, err);
+                }
+            } else {
+                console.log(`[DIAG] composerData not found in global DB for composerId: ${id}`);
+            }
+        }
+    } catch (err) {
+        console.log(`[DIAG] Error opening global DB:`, err);
+    } finally {
+        db?.close();
+    }
+}
+
+// --- Main Diagnostic Execution ---
+if (process.argv.includes('--diagnose-workspace')) {
+    const idx = process.argv.indexOf('--diagnose-workspace');
+    const workspaceName = process.argv[idx + 1];
+    if (!workspaceName) {
+        console.error('Usage: pnpm tsx scripts/investigation/explore_global_kv.ts --diagnose-workspace <workspaceName>');
+        process.exit(1);
+    }
+    printComposerContextsForWorkspace(workspaceName);
+    process.exit(0);
+} 

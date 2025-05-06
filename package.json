@@ -12,7 +12,7 @@
     "@oclif/core": "^4",
     "@oclif/plugin-help": "^6",
     "@oclif/plugin-plugins": "^5",
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^11.9.1",
     "clipboardy": "^4.0.0",
     "conf": "^13.1.0",
     "ora": "^8.2.0",
@@ -31,6 +31,7 @@
     "@types/chai": "^4",
     "@types/mocha": "^10",
     "@types/node": "^18",
+    "biome": "^0.3.3",
     "chai": "^4",
     "eslint": "^9",
     "eslint-config-oclif": "^6",
@@ -87,7 +88,8 @@
     "version": "oclif readme && git add README.md",
     "manage": "node dist/index.js --manage --older-than 30d",
     "manage-archive": "node dist/index.js --manage --older-than 30d --archive",
-    "test-twitter-bookmarks": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/twitter-bookmarks"
+    "test-twitter-bookmarks": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/twitter-bookmarks",
+    "test-file-forge": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/file-forge"
   },
   "types": "dist/index.d.ts",
   "pnpm": {

@@ -75,7 +75,7 @@ async function main() {
                 const specificKeyToCheck = 'workbench.panel.aichat.view.aichat.chatdata';
                 console.log(`\nChecking specific key: ${specificKeyToCheck}`);
                 const specificStmt = db.prepare("SELECT key, value FROM ItemTable WHERE key = ?");
-                const specificRow = specificStmt.get(specificKeyToCheck) as { key: string; value: string } | undefined;
+                const specificRow = specificStmt.get(specificKeyToCheck) as undefined | { key: string; value: string };
                 if (specificRow?.value) {
                     console.log(`  Found specific key: ${specificRow.key}`);
                     const data = safeJsonParse(specificRow.value);
@@ -84,6 +84,7 @@ async function main() {
                     } else {
                         console.log(`    Value is not valid JSON or empty.`);
                     }
+
                     console.log(`    Raw Value (first 200 chars): ${specificRow.value?.slice(0, 200)}${specificRow.value && specificRow.value.length > 200 ? '...' : ''}`);
                 } else {
                     console.log(`  Specific key ${specificKeyToCheck} not found.`);
@@ -113,6 +114,7 @@ async function main() {
                         }
                     }
                 }
+
                 if (!foundAnyKeyword) {
                     console.log("No additional rows found matching the search terms in ItemTable.");
                 }

@@ -382,6 +382,7 @@ export default class CursorHistory extends Command {
           this.log(`Workspace '${flags.workspace}' not found.`)
           return
         }
+
         this.log(`Using workspace from flag: ${flags.workspace}`)
       } else {
         // Get current directory name to use as workspace filter
@@ -418,6 +419,7 @@ export default class CursorHistory extends Command {
             this.log('No workspace selected.')
             return
           }
+
           workspaceNameToUse = selectedWorkspace.name
         }
       }
@@ -444,6 +446,7 @@ export default class CursorHistory extends Command {
               if (conv.conversation.length === 0) {
                 return !term || (conv.name?.toLowerCase().includes(termLower) || conv.text?.toLowerCase().includes(termLower));
               }
+
               // Otherwise, filter as before
               return !term ||
                 (conv.conversation[0]?.text?.toLowerCase() || '').includes(termLower) ||
@@ -464,12 +467,13 @@ export default class CursorHistory extends Command {
 
       // Export the selected conversation
       await this.exportConversation(selectedConversation)
-    } catch (err: any) {
-      if (err && err.name === 'ExitPromptError') {
+    } catch (error: any) {
+      if (error && error.name === 'ExitPromptError') {
         this.log('Prompt exited by user. No selection was made.')
         return
       }
-      throw err
+
+      throw error
     }
   }
 }

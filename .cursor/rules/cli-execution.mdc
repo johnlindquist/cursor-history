@@ -1,0 +1,24 @@
+---
+description:
+globs:
+alwaysApply: true
+---
+# CLI Execution Rule
+
+To run the Cursor History (chi) CLI or any of its commands, **ALWAYS USE** the provided scripts in [package.json](mdc:package.json) via `pnpm`:
+
+- Use `pnpm default` to run the default command
+- Use `pnpm extract` to extract all conversations
+- Use `pnpm search` to search conversations
+- Use any other scripts defined in [package.json](mdc:package.json)
+
+**Do NOT run** `node ./bin/run.js` directly. This can cause native module version mismatches with sqlite/better-sqlite3 and break the CLI.
+
+> Example:
+> ```sh
+> pnpm default
+> pnpm extract
+> pnpm search
+> ```
+
+**Reference:** [package.json](mdc:package.json) for all available scripts.

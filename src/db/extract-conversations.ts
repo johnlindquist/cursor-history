@@ -525,7 +525,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
   }
 
   const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
-  let foundWorkspaceDir: string | null = null
+  let foundWorkspaceDir: null | string = null
 
   for (const workspace of workspaces) {
     if (!workspace.isDirectory()) continue
@@ -544,9 +544,11 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
     } catch {
       continue
     }
+
     if (currentWorkspaceName.toLowerCase() !== nameLower && !workspacePath.toLowerCase().includes(nameLower)) {
       continue
     }
+
     foundWorkspaceDir = workspace.name
     break
   }
@@ -558,84 +560,165 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
 
   // Open the workspace DB and check ItemTable for allComposers
   const dbPath = join(workspaceStoragePath, foundWorkspaceDir, 'state.vscdb')
+  if (workspaceName.toLowerCase() === 'file-forge') {
+    console.log('[DEBUG] file-forge workspace DB path:', dbPath);
+  }
+
   if (!existsSync(dbPath)) {
     spinner.fail(`Workspace DB not found at ${dbPath}`)
     return []
   }
+
   let db: BetterSqlite3.Database | null = null
   try {
     db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
     const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as undefined | { value: string }
+    if (workspaceName.toLowerCase() === 'file-forge') {
+      console.log('[DEBUG] file-forge composer.composerData result:', result);
+    }
+
     if (result?.value) {
       const parsed = JSON.parse(result.value) as any
-      if (parsed && Array.isArray(parsed.allComposers)) {
-        let conversations: ConversationData[] = []
-        let metadataOnly: { composerId: string; meta: ConversationData }[] = []
-        for (const composer of parsed.allComposers) {
-          if (composer && typeof composer === 'object' && composer.composerId && composer.name) {
-            // Initially, treat as metadata-only
-            const meta: ConversationData = {
-              composerId: composer.composerId,
-              createdAt: composer.createdAt || 0,
-              name: composer.name,
-              conversation: [], // No messages, just metadata
-              workspaceName: workspaceName,
-              workspacePath: undefined,
-              unifiedMode: composer.unifiedMode,
-              text: composer.text,
-            }
-            metadataOnly.push({ composerId: composer.composerId, meta })
-          }
+      if (workspaceName.toLowerCase() === 'file-forge') {
+        if (parsed && Array.isArray(parsed.allComposers)) {
+          console.log('[DEBUG] file-forge allComposers FULL:', JSON.stringify(parsed.allComposers, null, 2));
+        } else {
+          console.log('[DEBUG] file-forge allComposers missing or not array:', parsed.allComposers);
         }
-        // Try to fetch full conversations from global DB for these composerIds
-        if (metadataOnly.length > 0) {
-          const globalDbPath = getCursorDbPath()
-          if (existsSync(globalDbPath)) {
-            let globalDb: BetterSqlite3.Database | null = null
-            try {
-              globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true, readonly: true })
-              const stmt = globalDb.prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
-              for (const { composerId, meta } of metadataOnly) {
-                const key = `composerData:${composerId}`
-                const row = stmt.get(key) as undefined | { value: Buffer }
-                if (row?.value) {
-                  try {
-                    const rawJson = row.value.toString('utf8')
-                    const parsedJson = JSON.parse(rawJson) as unknown
-                    if (
-                      typeof parsedJson === 'object' && parsedJson !== null &&
-                      'composerId' in parsedJson && typeof (parsedJson as RawConversationData).composerId === 'string' &&
-                      'conversation' in parsedJson && Array.isArray((parsedJson as RawConversationData).conversation) &&
-                      'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
-                    ) {
-                      const rawData = parsedJson as RawConversationData
-                      const processedData = processConversationEntry(rawData)
-                      if (processedData) {
-                        processedData.workspaceName = workspaceName
-                        processedData.workspacePath = listWorkspaces().find(ws => ws.name === workspaceName)?.path || ''
-                        conversations.push(processedData)
-                        continue
-                      }
-                    }
-                  } catch {
-                    // Ignore errors for individual entries
-                  }
-                }
-                // If not found in global DB, keep the metadata-only version
-                conversations.push(meta)
+      }
+
+      if (parsed && Array.isArray(parsed.allComposers)) {
+        const conversations: ConversationData[] = []
+        const metadataOnly: { composerId: string; meta: ConversationData }[] = []
+        for (const composer of parsed.allComposers) {
+          if (composer.conversation && composer.conversation.length > 0) {
+            conversations.push(composer)
+          } else if (composer.fullConversationHeadersOnly && composer.conversationMap) {
+            // Reconstruct conversation from headers and map
+            const items: any[] = [];
+            for (const header of composer.fullConversationHeadersOnly) {
+              if (header.bubbleId && composer.conversationMap[header.bubbleId]) {
+                items.push(composer.conversationMap[header.bubbleId]);
               }
-            } catch (error) {
-              spinner.fail(`Error fetching full conversations from global DB: ${error}`)
-            } finally {
-              globalDb?.close()
+            }
+
+            if (items.length > 0) {
+              conversations.push({ ...composer, conversation: items });
+            } else {
+              metadataOnly.push({ composerId: composer.composerId, meta: composer });
             }
           } else {
-            // If global DB doesn't exist, just use metadata
-            conversations = metadataOnly.map(x => x.meta)
+            metadataOnly.push({ composerId: composer.composerId, meta: composer });
           }
         }
+
+        if (workspaceName.toLowerCase() === 'file-forge') {
+          const globalDbPath = getCursorDbPath()
+          const globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true, readonly: true })
+          for (const meta of metadataOnly) {
+            const key = `composerData:${meta.composerId}`
+            const row = globalDb.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(key) as undefined | { value: Buffer }
+            if (row && row.value) {
+              try {
+                const rawJson = row.value.toString('utf8')
+                const parsed = JSON.parse(rawJson)
+                // Try to reconstruct conversation if only headers/map exist
+                let items: any[] = [];
+                if (Array.isArray(parsed.conversation) && parsed.conversation.length > 0) {
+                  items = parsed.conversation;
+                } else if (Array.isArray(parsed.fullConversationHeadersOnly) && parsed.conversationMap) {
+                  for (const header of parsed.fullConversationHeadersOnly) {
+                    if (header.bubbleId && parsed.conversationMap[header.bubbleId]) {
+                      items.push(parsed.conversationMap[header.bubbleId]);
+                    }
+                  }
+                }
+
+                const hasConversation = items.length > 0;
+                console.log(`[DEBUG] file-forge global DB composerId ${meta.composerId}: found, hasConversation=${hasConversation}`)
+                if (hasConversation) {
+                  conversations.push({ ...parsed, conversation: items });
+                }
+              } catch {
+                console.log(`[DEBUG] file-forge global DB composerId ${meta.composerId}: found, but failed to parse JSON`)
+              }
+            } else {
+              console.log(`[DEBUG] file-forge global DB composerId ${meta.composerId}: NOT found`)
+            }
+          }
+        }
+
         spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}" (full or metadata).`)
         conversations.sort((a, b) => b.createdAt - a.createdAt)
+        // Fallback: If still no conversations, try context-based global scan
+        if (conversations.length === 0) {
+          const globalDbPath = getCursorDbPath()
+          if (existsSync(globalDbPath)) {
+            const globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true, readonly: true })
+            const rows = globalDb.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as { key: string, value: Buffer }[];
+            const workspacePath = join(getWorkspaceStoragePath(), foundWorkspaceDir);
+            const workspaceJsonPath = join(workspacePath, 'workspace.json');
+            let matchPath = '';
+            if (existsSync(workspaceJsonPath)) {
+              try {
+                const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'));
+                if (workspaceData.folder) {
+                  matchPath = decodeWorkspacePath(workspaceData.folder);
+                }
+              } catch { }
+            }
+
+            const matchName = workspaceName.toLowerCase();
+            for (const row of rows) {
+              try {
+                const rawJson = row.value.toString('utf8');
+                const parsed = JSON.parse(rawJson);
+                // Check context for workspace path or name (relaxed: match name anywhere in any string field)
+                let found = false;
+                // 1. Check context
+                if (parsed?.context) {
+                  const ctx = JSON.stringify(parsed.context).toLowerCase();
+                  if (matchPath && ctx.includes(matchPath)) found = true;
+                  if (!found && ctx.includes(matchName)) found = true;
+                }
+                // 2. Check fileSelections
+                if (!found && parsed?.fileSelections) {
+                  const fsArr = Array.isArray(parsed.fileSelections) ? parsed.fileSelections : [];
+                  for (const fs of fsArr) {
+                    if (typeof fs?.uri?.fsPath === 'string' && matchPath && fs.uri.fsPath.toLowerCase().includes(matchPath)) found = true;
+                    if (typeof fs?.uri?.fsPath === 'string' && fs.uri.fsPath.toLowerCase().includes(matchName)) found = true;
+                  }
+                }
+                // 3. Relaxed: check all string fields for workspace name
+                if (!found) {
+                  const searchStrings = JSON.stringify(parsed).toLowerCase();
+                  if (searchStrings.includes(matchName)) found = true;
+                }
+                if (found) {
+                  // Try to reconstruct conversation as before
+                  let items: any[] = [];
+                  if (Array.isArray(parsed.conversation) && parsed.conversation.length > 0) {
+                    items = parsed.conversation;
+                  } else if (Array.isArray(parsed.fullConversationHeadersOnly) && parsed.conversationMap) {
+                    for (const header of parsed.fullConversationHeadersOnly) {
+                      if (header.bubbleId && parsed.conversationMap[header.bubbleId]) {
+                        items.push(parsed.conversationMap[header.bubbleId]);
+                      }
+                    }
+                  }
+                  if (items.length > 0) {
+                    conversations.push({ ...parsed, conversation: items });
+                  }
+                }
+              } catch { }
+            }
+
+            globalDb.close();
+            conversations.sort((a, b) => b.createdAt - a.createdAt);
+            spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}" by context fallback.`);
+          }
+        }
+
         return conversations
       }
     }
@@ -653,11 +736,13 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
     spinner.info(`No composer IDs found for workspace "${workspaceName}".`)
     return []
   }
+
   const globalDbPath = getCursorDbPath()
   if (!existsSync(globalDbPath)) {
     spinner.fail('Global database not found.')
     return []
   }
+
   let globalDb: BetterSqlite3.Database | null = null
   const conversations: ConversationData[] = []
   try {
@@ -689,12 +774,14 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
         }
       }
     }
+
     spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}" from global DB.`)
   } catch (error) {
     spinner.fail(`Error fetching workspace conversations from global DB: ${error}`)
   } finally {
     globalDb?.close()
   }
+
   conversations.sort((a, b) => b.createdAt - a.createdAt)
   return conversations
 }
