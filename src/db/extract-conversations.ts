@@ -569,10 +569,12 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
     if (result?.value) {
       const parsed = JSON.parse(result.value) as any
       if (parsed && Array.isArray(parsed.allComposers)) {
-        const conversations: ConversationData[] = []
+        let conversations: ConversationData[] = []
+        let metadataOnly: { composerId: string; meta: ConversationData }[] = []
         for (const composer of parsed.allComposers) {
           if (composer && typeof composer === 'object' && composer.composerId && composer.name) {
-            conversations.push({
+            // Initially, treat as metadata-only
+            const meta: ConversationData = {
               composerId: composer.composerId,
               createdAt: composer.createdAt || 0,
               name: composer.name,
@@ -581,10 +583,58 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
               workspacePath: undefined,
               unifiedMode: composer.unifiedMode,
               text: composer.text,
-            })
+            }
+            metadataOnly.push({ composerId: composer.composerId, meta })
           }
         }
-        spinner.succeed(`Found ${conversations.length} conversations (metadata only) for workspace "${workspaceName}" from allComposers.`)
+        // Try to fetch full conversations from global DB for these composerIds
+        if (metadataOnly.length > 0) {
+          const globalDbPath = getCursorDbPath()
+          if (existsSync(globalDbPath)) {
+            let globalDb: BetterSqlite3.Database | null = null
+            try {
+              globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true, readonly: true })
+              const stmt = globalDb.prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
+              for (const { composerId, meta } of metadataOnly) {
+                const key = `composerData:${composerId}`
+                const row = stmt.get(key) as undefined | { value: Buffer }
+                if (row?.value) {
+                  try {
+                    const rawJson = row.value.toString('utf8')
+                    const parsedJson = JSON.parse(rawJson) as unknown
+                    if (
+                      typeof parsedJson === 'object' && parsedJson !== null &&
+                      'composerId' in parsedJson && typeof (parsedJson as RawConversationData).composerId === 'string' &&
+                      'conversation' in parsedJson && Array.isArray((parsedJson as RawConversationData).conversation) &&
+                      'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
+                    ) {
+                      const rawData = parsedJson as RawConversationData
+                      const processedData = processConversationEntry(rawData)
+                      if (processedData) {
+                        processedData.workspaceName = workspaceName
+                        processedData.workspacePath = listWorkspaces().find(ws => ws.name === workspaceName)?.path || ''
+                        conversations.push(processedData)
+                        continue
+                      }
+                    }
+                  } catch {
+                    // Ignore errors for individual entries
+                  }
+                }
+                // If not found in global DB, keep the metadata-only version
+                conversations.push(meta)
+              }
+            } catch (error) {
+              spinner.fail(`Error fetching full conversations from global DB: ${error}`)
+            } finally {
+              globalDb?.close()
+            }
+          } else {
+            // If global DB doesn't exist, just use metadata
+            conversations = metadataOnly.map(x => x.meta)
+          }
+        }
+        spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}" (full or metadata).`)
         conversations.sort((a, b) => b.createdAt - a.createdAt)
         return conversations
       }
