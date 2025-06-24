@@ -480,19 +480,65 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
     for (const row of rows) {
       try {
         const rawJson = row.value.toString('utf8')
-        const parsedJson = JSON.parse(rawJson) as unknown
-        // Check type inline
+        const parsedJson: any = JSON.parse(rawJson) // eslint-disable-line @typescript-eslint/no-explicit-any
+
+        // We need at least composerId and createdAt to proceed
         if (
-          typeof parsedJson === 'object' && parsedJson !== null &&
-          'composerId' in parsedJson && typeof (parsedJson as RawConversationData).composerId === 'string' &&
-          'conversation' in parsedJson && Array.isArray((parsedJson as RawConversationData).conversation) &&
-          'createdAt' in parsedJson && typeof (parsedJson as RawConversationData).createdAt === 'number'
+          !(parsedJson && typeof parsedJson === 'object' && 'composerId' in parsedJson && typeof parsedJson.composerId === 'string') ||
+          !("createdAt" in parsedJson && typeof parsedJson.createdAt === 'number')
         ) {
-          const rawData = parsedJson as RawConversationData;
-          const processedData = processConversationEntry(rawData);
-          if (processedData) {
-            conversations.push(processedData);
+          continue
+        }
+
+        let items: any[] = [] // eslint-disable-line @typescript-eslint/no-explicit-any
+
+        // 1) Already has full conversation array
+        if (Array.isArray(parsedJson.conversation) && parsedJson.conversation.length > 0) {
+          items = parsedJson.conversation
+        }
+
+        // 2) Try to rebuild from conversationMap (sometimes present)
+        if (items.length === 0 && parsedJson.conversationMap && typeof parsedJson.conversationMap === 'object') {
+          items = Object.values(parsedJson.conversationMap)
+        }
+
+        // 3) Try to rebuild from fullConversationHeadersOnly + bubbleId keys
+        if (items.length === 0 && Array.isArray(parsedJson.fullConversationHeadersOnly)) {
+          const stmtBubble = db.prepare('SELECT value FROM cursorDiskKV WHERE key = ?')
+          for (const header of parsedJson.fullConversationHeadersOnly) {
+            if (header && header.bubbleId) {
+              const bubbleKey = `bubbleId:${parsedJson.composerId}:${header.bubbleId}`
+              const bubbleRow = stmtBubble.get(bubbleKey) as undefined | { value: Buffer }
+              if (bubbleRow?.value) {
+                try {
+                  const bubbleMsg = JSON.parse(bubbleRow.value.toString('utf8'))
+                  items.push(bubbleMsg)
+                } catch {
+                  /* ignore malformed */
+                }
+              }
+            }
           }
+        }
+
+        // If still empty, skip
+        if (items.length === 0) {
+          continue
+        }
+
+        const rawData: RawConversationData = {
+          composerId: parsedJson.composerId,
+          createdAt: parsedJson.createdAt,
+          conversation: items,
+          name: parsedJson.name,
+          text: parsedJson.text,
+          unifiedMode: parsedJson.unifiedMode,
+          context: parsedJson.context,
+        }
+
+        const processedData = processConversationEntry(rawData)
+        if (processedData) {
+          conversations.push(processedData)
         }
       } catch {
         // Ignore errors processing individual entries
