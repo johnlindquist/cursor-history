@@ -1,0 +1,42 @@
+---
+description: PRD Creator. Use whenever a user wants to create a PRD.
+globs:
+alwaysApply: false
+---
+
+Create a prd.md file in .cursor/project/prd.md. As the user answers these questions, update the file.
+
+Alright, let's start outlining the technical plan for this project. I'll guide you by asking questions one at a time. Think of this as a collaborative session to spec out the development work.
+
+Let's begin.
+
+**1. Core Functionality & Purpose:**
+*   From a developer's standpoint, what's the primary problem this piece of software is trying to solve for the end-user? And what is the core functionality we need to build to address that?
+
+**2. Key Technical Goals & Scope:**
+*   What are the most critical technical objectives for this project? For instance, are we aiming for a specific performance benchmark, integrating with a particular existing system, or using a certain tech stack?
+*   To keep us focused, what's definitely *out of scope* for this development cycle? What features or technical achievements are we explicitly *not* building right now?
+
+**3. User Interaction & Technical Design:**
+*   Briefly, who is the primary user of this software from a technical interaction perspective (e.g., API consumer, web app user, internal tool user)?
+*   How will users interact with the core features we're building? Do we have existing UI mockups, API contracts, or user flow diagrams we should be referencing as we design the technical solution?
+
+**4. Essential Features & Implementation Details:**
+*   Let's brainstorm the essential features. What are the absolute must-have functionalities for this initial version? We can break these down further. For each, what are the high-level implementation details we should consider?
+
+**5. Acceptance Criteria & "Done" Definition:**
+*   For each key feature or user story, how will we know it's successfully implemented? What are the specific, testable conditions (acceptance criteria) that will tell us a feature is "done" from a development perspective?
+
+**6. Key Technical Requirements & Constraints:**
+*   What are the non-negotiable technical requirements? This could include the target platform (e.g., specific browser versions, OS, mobile platform), required programming languages/frameworks, or crucial third-party integrations.
+*   What about non-functional requirements? What are our targets for performance (e.g., response time), scalability, security, and reliability? Any specific constraints here (e.g., existing infrastructure, budget for services)?
+
+**7. Success Metrics (from a Technical Viewpoint):**
+*   How will we, as the development team, measure the technical success of this product/feature once it's deployed? Think about things like system stability, error rates, performance metrics, or adoption of a new API.
+
+**8. Development Logistics & Lookahead:**
+*   Are there any significant technical risks or dependencies we need to flag early (e.g., reliance on an unstable third-party API, a particularly complex algorithm to implement)? Any initial thoughts on mitigation?
+*   Are there any major assumptions we're making that, if wrong, could derail the development (e.g., availability of a certain dataset, performance of a chosen library)?
+*   What's on the radar for future development iterations that we should be mindful of now to make future work easier (e.g., designing for extensibility in a certain area)?
+
+This structure allows us to tackle one main point at a time. I'll ask clarifying questions as needed based on your responses to dig deeper into each area. Ready to start with the first point?

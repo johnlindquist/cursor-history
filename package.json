@@ -1,7 +1,7 @@
 {
   "name": "@johnlindquist/cursor-history",
   "description": "A new CLI generated with oclif",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "author": "John Lindquist",
   "bin": {
     "chi": "./bin/run.js"
@@ -41,7 +41,9 @@
     "semantic-release": "^24.2.3",
     "shx": "^0.3.3",
     "ts-node": "^10",
-    "typescript": "^5"
+    "typescript": "^5",
+    "sinon": "^17.0.1",
+    "@types/sinon": "^10.0.15"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -89,7 +91,8 @@
     "manage": "node dist/index.js --manage --older-than 30d",
     "manage-archive": "node dist/index.js --manage --older-than 30d --archive",
     "test-twitter-bookmarks": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/twitter-bookmarks",
-    "test-file-forge": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/file-forge"
+    "test-file-forge": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/file-forge",
+    "test-github-examples": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/github-examples"
   },
   "types": "dist/index.d.ts",
   "pnpm": {

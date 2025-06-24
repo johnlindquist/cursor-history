@@ -512,6 +512,17 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
 }
 
 /**
+ * Helper: recursively search all string fields for a match
+ */
+function objectContainsString(obj: any, needle: string): boolean {
+  if (!obj) return false;
+  if (typeof obj === 'string') return obj.toLowerCase().includes(needle);
+  if (Array.isArray(obj)) return obj.some((el) => objectContainsString(el, needle));
+  if (typeof obj === 'object') return Object.values(obj).some((v) => objectContainsString(v, needle));
+  return false;
+}
+
+/**
  * Gets conversations for a specific workspace.
  */
 export async function getConversationsForWorkspace(workspaceName: string): Promise<ConversationData[]> {
@@ -570,6 +581,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
   }
 
   let db: BetterSqlite3.Database | null = null
+  const conversations: ConversationData[] = []
   try {
     db = new BetterSqlite3(dbPath, { fileMustExist: true, readonly: true })
     const result = db.prepare("SELECT value FROM ItemTable WHERE key = 'composer.composerData'").get() as undefined | { value: string }
@@ -578,7 +590,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
     }
 
     if (result?.value) {
-      const parsed = JSON.parse(result.value) as any
+      const parsed = JSON.parse(result.value) as any // eslint-disable-line @typescript-eslint/no-explicit-any
       if (workspaceName.toLowerCase() === 'file-forge') {
         if (parsed && Array.isArray(parsed.allComposers)) {
           console.log('[DEBUG] file-forge allComposers FULL:', JSON.stringify(parsed.allComposers, null, 2));
@@ -588,27 +600,48 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
       }
 
       if (parsed && Array.isArray(parsed.allComposers)) {
-        const conversations: ConversationData[] = []
         const metadataOnly: { composerId: string; meta: ConversationData }[] = []
         for (const composer of parsed.allComposers) {
           if (composer.conversation && composer.conversation.length > 0) {
             conversations.push(composer)
-          } else if (composer.fullConversationHeadersOnly && composer.conversationMap) {
-            // Reconstruct conversation from headers and map
-            const items: any[] = [];
+          } else if (composer.fullConversationHeadersOnly) {
+            // --- NEW LOGIC: Try to reconstruct conversation from workspace DB bubbleId keys ---
+            const items: unknown[] = []
             for (const header of composer.fullConversationHeadersOnly) {
-              if (header.bubbleId && composer.conversationMap[header.bubbleId]) {
-                items.push(composer.conversationMap[header.bubbleId]);
+              if (header.bubbleId) {
+                // Look for bubbleId:[composerId]:[bubbleId] in the same workspace DB
+                const bubbleKey = `bubbleId:${composer.composerId}:${header.bubbleId}`
+                const bubbleRow = db.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(bubbleKey) as undefined | { value: Buffer }
+                if (bubbleRow && bubbleRow.value) {
+                  try {
+                    const bubbleMsg = JSON.parse(bubbleRow.value.toString('utf8'))
+                    items.push(bubbleMsg)
+                  } catch {
+                    // Ignore parse errors
+                  }
+                }
               }
             }
-
             if (items.length > 0) {
-              conversations.push({ ...composer, conversation: items });
+              conversations.push({ ...composer, conversation: items })
+            } else if (composer.conversationMap) {
+              // Fallback: try to reconstruct from conversationMap (legacy logic)
+              const mapItems: unknown[] = []
+              for (const header of composer.fullConversationHeadersOnly) {
+                if (header.bubbleId && composer.conversationMap[header.bubbleId]) {
+                  mapItems.push(composer.conversationMap[header.bubbleId])
+                }
+              }
+              if (mapItems.length > 0) {
+                conversations.push({ ...composer, conversation: mapItems })
+              } else {
+                metadataOnly.push({ composerId: composer.composerId, meta: composer })
+              }
             } else {
-              metadataOnly.push({ composerId: composer.composerId, meta: composer });
+              metadataOnly.push({ composerId: composer.composerId, meta: composer })
             }
           } else {
-            metadataOnly.push({ composerId: composer.composerId, meta: composer });
+            metadataOnly.push({ composerId: composer.composerId, meta: composer })
           }
         }
 
@@ -651,71 +684,102 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
         spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}" (full or metadata).`)
         conversations.sort((a, b) => b.createdAt - a.createdAt)
         // Fallback: If still no conversations, try context-based global scan
-        if (conversations.length === 0) {
-          const globalDbPath = getCursorDbPath()
-          if (existsSync(globalDbPath)) {
-            const globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true, readonly: true })
-            const rows = globalDb.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all() as { key: string, value: Buffer }[];
-            const workspacePath = join(getWorkspaceStoragePath(), foundWorkspaceDir);
-            const workspaceJsonPath = join(workspacePath, 'workspace.json');
-            let matchPath = '';
-            if (existsSync(workspaceJsonPath)) {
+        if (conversations.length === 0 && foundWorkspaceDir) {
+          // Get the full workspace path from workspace.json
+          const workspaceJsonPath = join(workspaceStoragePath, foundWorkspaceDir, 'workspace.json');
+          let matchPath = '';
+          if (existsSync(workspaceJsonPath)) {
+            try {
+              const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'));
+              if (workspaceData.folder) {
+                matchPath = decodeWorkspacePath(workspaceData.folder).toLowerCase();
+              }
+            } catch { }
+          }
+          if (matchPath) {
+            const globalDbPath = getCursorDbPath();
+            if (existsSync(globalDbPath)) {
+              let globalDb: BetterSqlite3.Database | null = null;
               try {
-                const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'));
-                if (workspaceData.folder) {
-                  matchPath = decodeWorkspacePath(workspaceData.folder);
-                }
-              } catch { }
-            }
-
-            const matchName = workspaceName.toLowerCase();
-            for (const row of rows) {
-              try {
-                const rawJson = row.value.toString('utf8');
-                const parsed = JSON.parse(rawJson);
-                // Check context for workspace path or name (relaxed: match name anywhere in any string field)
-                let found = false;
-                // 1. Check context
-                if (parsed?.context) {
-                  const ctx = JSON.stringify(parsed.context).toLowerCase();
-                  if (matchPath && ctx.includes(matchPath)) found = true;
-                  if (!found && ctx.includes(matchName)) found = true;
-                }
-                // 2. Check fileSelections
-                if (!found && parsed?.fileSelections) {
-                  const fsArr = Array.isArray(parsed.fileSelections) ? parsed.fileSelections : [];
-                  for (const fs of fsArr) {
-                    if (typeof fs?.uri?.fsPath === 'string' && matchPath && fs.uri.fsPath.toLowerCase().includes(matchPath)) found = true;
-                    if (typeof fs?.uri?.fsPath === 'string' && fs.uri.fsPath.toLowerCase().includes(matchName)) found = true;
-                  }
-                }
-                // 3. Relaxed: check all string fields for workspace name
-                if (!found) {
-                  const searchStrings = JSON.stringify(parsed).toLowerCase();
-                  if (searchStrings.includes(matchName)) found = true;
-                }
-                if (found) {
-                  // Try to reconstruct conversation as before
-                  let items: any[] = [];
-                  if (Array.isArray(parsed.conversation) && parsed.conversation.length > 0) {
-                    items = parsed.conversation;
-                  } else if (Array.isArray(parsed.fullConversationHeadersOnly) && parsed.conversationMap) {
-                    for (const header of parsed.fullConversationHeadersOnly) {
-                      if (header.bubbleId && parsed.conversationMap[header.bubbleId]) {
-                        items.push(parsed.conversationMap[header.bubbleId]);
+                globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true });
+                const rows = globalDb.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all();
+                // --- Build global bubbleId -> message map ---
+                const globalBubbleMap: Record<string, any> = {};
+                for (const row of rows) {
+                  try {
+                    const { key, value } = row as { key: string, value: Buffer };
+                    const rawJson = value.toString('utf8');
+                    const parsed = JSON.parse(rawJson);
+                    if (parsed && typeof parsed === 'object') {
+                      // Add all messages from conversation array
+                      if (Array.isArray(parsed.conversation)) {
+                        for (const msg of parsed.conversation) {
+                          if (msg && msg.bubbleId) globalBubbleMap[msg.bubbleId] = msg;
+                        }
+                      }
+                      // Add all messages from conversationMap
+                      if (parsed.conversationMap && typeof parsed.conversationMap === 'object') {
+                        for (const [bid, msg] of Object.entries(parsed.conversationMap)) {
+                          if (msg && typeof msg === 'object') globalBubbleMap[bid] = msg;
+                        }
                       }
                     }
-                  }
-                  if (items.length > 0) {
-                    conversations.push({ ...parsed, conversation: items });
+                  } catch { }
+                }
+                // --- End global bubble map build ---
+                let firstDebug = true;
+                for (const row of rows) {
+                  try {
+                    const { key, value } = row as { key: string, value: Buffer };
+                    const rawJson = value.toString('utf8');
+                    const parsed = JSON.parse(rawJson);
+                    if (objectContainsString(parsed, matchPath)) {
+                      const hasConv = parsed.conversation && Array.isArray(parsed.conversation);
+                      const convLen = hasConv ? parsed.conversation.length : 0;
+                      if (firstDebug) {
+                        console.log(`[DEBUG] Matched composerData: ${key} for workspace path: ${matchPath}`);
+                        if (Array.isArray(parsed.fullConversationHeadersOnly)) {
+                          console.log(`[DEBUG]   fullConversationHeadersOnly length: ${parsed.fullConversationHeadersOnly.length}`);
+                          if (parsed.fullConversationHeadersOnly.length > 0) {
+                            const headerIds = parsed.fullConversationHeadersOnly.slice(0, 10).map((h: any) => h.bubbleId).filter(Boolean);
+                            console.log(`[DEBUG]   first 10 header bubbleIds: ${headerIds.join(', ')}`);
+                          }
+                        }
+                        const globalBubbleKeys = Object.keys(globalBubbleMap).slice(0, 10);
+                        console.log(`[DEBUG]   first 10 global bubbleIds: ${globalBubbleKeys.join(', ')}`);
+                        firstDebug = false;
+                      }
+                      if (hasConv && convLen > 0) {
+                        conversations.push({
+                          id: key.replace('composerData:', ''),
+                          ...parsed,
+                        });
+                      } else if (Array.isArray(parsed.fullConversationHeadersOnly)) {
+                        // Reconstruct conversation from headers using global bubble map
+                        const items: any[] = [];
+                        for (const header of parsed.fullConversationHeadersOnly) {
+                          if (header.bubbleId && globalBubbleMap[header.bubbleId]) {
+                            items.push(globalBubbleMap[header.bubbleId]);
+                          }
+                        }
+                        if (items.length > 0) {
+                          conversations.push({
+                            id: key.replace('composerData:', ''),
+                            ...parsed,
+                            conversation: items,
+                          });
+                          console.log(`[DEBUG]   Reconstructed conversation from headers/map, length: ${items.length}`);
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    // ignore parse errors
                   }
                 }
-              } catch { }
+              } finally {
+                if (globalDb) globalDb.close();
+              }
             }
-
-            globalDb.close();
-            conversations.sort((a, b) => b.createdAt - a.createdAt);
-            spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}" by context fallback.`);
           }
         }
 
@@ -744,7 +808,6 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
   }
 
   let globalDb: BetterSqlite3.Database | null = null
-  const conversations: ConversationData[] = []
   try {
     globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true, readonly: true })
     const stmt = globalDb.prepare("SELECT value FROM cursorDiskKV WHERE key = ?")

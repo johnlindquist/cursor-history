@@ -32,6 +32,9 @@ chi --extract
 # Fuzzy‑search by title and copy the chosen conversation to clipboard
 chi --search
 
+# Interactively browse any workspace and pick a conversation
+chi --browse
+
 # Manage old exports (delete older than 30 d)
 chi --manage --older-than 30d
 ```
