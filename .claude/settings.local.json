@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm remove:*)",
+      "Bash(pnpm install:*)",
+      "Bash(chi:*)",
+      "Bash(pnpm link:*)",
+      "Bash(pnpm unlink:*)",
+      "Bash(PNPM_ENABLE_PREBUILDS=true pnpm add -g @johnlindquist/cursor-history)",
+      "Bash(ls:*)",
+      "Bash(pnpm approve-builds:*)"
+    ],
+    "deny": []
+  }
+}

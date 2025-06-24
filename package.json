@@ -12,11 +12,10 @@
     "@oclif/core": "^4",
     "@oclif/plugin-help": "^6",
     "@oclif/plugin-plugins": "^5",
-    "better-sqlite3": "^11.9.1",
+    "better-sqlite3": "^12.1.0",
     "clipboardy": "^4.0.0",
     "conf": "^13.1.0",
     "ora": "^8.2.0",
-    "sqlite3": "^5.1.7",
     "tsx": "^4.19.3"
   },
   "devDependencies": {
@@ -31,6 +30,7 @@
     "@types/chai": "^4",
     "@types/mocha": "^10",
     "@types/node": "^18",
+    "@types/sinon": "^10.0.15",
     "biome": "^0.3.3",
     "chai": "^4",
     "eslint": "^9",
@@ -40,10 +40,9 @@
     "oclif": "^4",
     "semantic-release": "^24.2.3",
     "shx": "^0.3.3",
-    "ts-node": "^10",
-    "typescript": "^5",
     "sinon": "^17.0.1",
-    "@types/sinon": "^10.0.15"
+    "ts-node": "^10",
+    "typescript": "^5"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -97,9 +96,7 @@
   "types": "dist/index.d.ts",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "esbuild",
-      "sqlite3"
+      "better-sqlite3"
     ],
     "peerDependencyRules": {
       "allowedVersions": {
