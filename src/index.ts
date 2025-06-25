@@ -439,7 +439,7 @@ export default class CursorHistory extends Command {
       const workspaceConversations = await getConversationsForWorkspace(workspaceNameToUse)
 
       if (workspaceConversations.length === 0) {
-        this.log(`No conversations found for workspace: ${selectedWorkspace.name}`)
+        // Don't scare users with "No conversations found" - the spinner already showed the result
         return
       }
 

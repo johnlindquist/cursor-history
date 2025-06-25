@@ -316,8 +316,13 @@ function getWorkspaceComposerIds(workspaceName: string): Set<string> {
     }
 
     // Check if this workspace matches the target name (case-insensitive)
-    // Match if basename is the same OR if the full path contains the name
-    if (currentWorkspaceName.toLowerCase() !== nameLower && !workspacePath.toLowerCase().includes(nameLower)) {
+    // First try exact path match, then basename match, then path contains
+    const pathLower = workspacePath.toLowerCase();
+    const exactPathMatch = pathLower === nameLower || pathLower === nameLower.replace(/\\/g, '/');
+    const basenameMatch = currentWorkspaceName.toLowerCase() === nameLower;
+    const pathContainsMatch = pathLower.includes(nameLower);
+
+    if (!exactPathMatch && !basenameMatch && !pathContainsMatch) {
       continue;
     }
 
@@ -602,12 +607,16 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
       continue
     }
 
-    if (currentWorkspaceName.toLowerCase() !== nameLower && !workspacePath.toLowerCase().includes(nameLower)) {
-      continue
-    }
+    // First try exact path match, then basename match, then path contains
+    const pathLower = workspacePath.toLowerCase();
+    const exactPathMatch = pathLower === nameLower || pathLower === nameLower.replace(/\\/g, '/');
+    const basenameMatch = currentWorkspaceName.toLowerCase() === nameLower;
+    const pathContainsMatch = pathLower.includes(nameLower);
 
-    foundWorkspaceDir = workspace.name
-    break
+    if (exactPathMatch || basenameMatch || pathContainsMatch) {
+      foundWorkspaceDir = workspace.name
+      break
+    }
   }
 
   if (!foundWorkspaceDir) {
@@ -617,9 +626,6 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
 
   // Open the workspace DB and check ItemTable for allComposers
   const dbPath = join(workspaceStoragePath, foundWorkspaceDir, 'state.vscdb')
-  if (workspaceName.toLowerCase() === 'file-forge') {
-    console.log('[DEBUG] file-forge workspace DB path:', dbPath);
-  }
 
   if (!existsSync(dbPath)) {
     spinner.fail(`Workspace DB not found at ${dbPath}`)
@@ -637,53 +643,72 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
 
     if (result?.value) {
       const parsed = JSON.parse(result.value) as any // eslint-disable-line @typescript-eslint/no-explicit-any
-      if (workspaceName.toLowerCase() === 'file-forge') {
-        if (parsed && Array.isArray(parsed.allComposers)) {
-          console.log('[DEBUG] file-forge allComposers FULL:', JSON.stringify(parsed.allComposers, null, 2));
-        } else {
-          console.log('[DEBUG] file-forge allComposers missing or not array:', parsed.allComposers);
-        }
-      }
 
       if (parsed && Array.isArray(parsed.allComposers)) {
         const metadataOnly: { composerId: string; meta: ConversationData }[] = []
         for (const composer of parsed.allComposers) {
           if (composer.conversation && composer.conversation.length > 0) {
-            conversations.push(composer)
+            // Process the conversation through processConversationEntry
+            const rawData: RawConversationData = {
+              composerId: composer.composerId,
+              conversation: composer.conversation,
+              createdAt: composer.createdAt,
+              name: composer.name,
+              text: composer.text,
+              unifiedMode: composer.unifiedMode,
+              context: composer.context
+            }
+            const processedData = processConversationEntry(rawData)
+            if (processedData) {
+              conversations.push(processedData)
+            }
           } else if (composer.fullConversationHeadersOnly) {
-            // --- NEW LOGIC: Try to reconstruct conversation from workspace DB bubbleId keys ---
+            // Try to reconstruct conversation from workspace DB bubbleId keys
             const items: unknown[] = []
-            for (const header of composer.fullConversationHeadersOnly) {
-              if (header.bubbleId) {
-                // Look for bubbleId:[composerId]:[bubbleId] in the same workspace DB
-                const bubbleKey = `bubbleId:${composer.composerId}:${header.bubbleId}`
-                const bubbleRow = db.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(bubbleKey) as undefined | { value: Buffer }
-                if (bubbleRow && bubbleRow.value) {
-                  try {
-                    const bubbleMsg = JSON.parse(bubbleRow.value.toString('utf8'))
-                    items.push(bubbleMsg)
-                  } catch {
-                    // Ignore parse errors
+            // First try to get messages from conversationMap if it exists
+            if (composer.conversationMap && typeof composer.conversationMap === 'object') {
+              for (const header of composer.fullConversationHeadersOnly) {
+                if (header.bubbleId && composer.conversationMap[header.bubbleId]) {
+                  items.push(composer.conversationMap[header.bubbleId])
+                }
+              }
+            }
+            // If no conversationMap or items, try to fetch from DB
+            if (items.length === 0) {
+              for (const header of composer.fullConversationHeadersOnly) {
+                if (header.bubbleId) {
+                  // Look for bubbleId:[composerId]:[bubbleId] in the same workspace DB
+                  const bubbleKey = `bubbleId:${composer.composerId}:${header.bubbleId}`
+                  const bubbleRow = (db.prepare('SELECT value FROM ItemTable WHERE key = ?').get(bubbleKey) ??
+                    db.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(bubbleKey)) as undefined | { value: Buffer | string }
+                  if (bubbleRow && bubbleRow.value) {
+                    try {
+                      const bubbleMsg = JSON.parse(typeof bubbleRow.value === 'string' ? bubbleRow.value : bubbleRow.value.toString('utf8'))
+                      items.push(bubbleMsg)
+                    } catch {
+                      // Ignore parse errors
+                    }
                   }
                 }
               }
             }
             if (items.length > 0) {
-              conversations.push({ ...composer, conversation: items })
-            } else if (composer.conversationMap) {
-              // Fallback: try to reconstruct from conversationMap (legacy logic)
-              const mapItems: unknown[] = []
-              for (const header of composer.fullConversationHeadersOnly) {
-                if (header.bubbleId && composer.conversationMap[header.bubbleId]) {
-                  mapItems.push(composer.conversationMap[header.bubbleId])
-                }
+              // Process the reconstructed conversation through processConversationEntry
+              const rawData: RawConversationData = {
+                composerId: composer.composerId,
+                conversation: items as ConversationItem[],
+                createdAt: composer.createdAt,
+                name: composer.name,
+                text: composer.text,
+                unifiedMode: composer.unifiedMode,
+                context: composer.context
               }
-              if (mapItems.length > 0) {
-                conversations.push({ ...composer, conversation: mapItems })
-              } else {
-                metadataOnly.push({ composerId: composer.composerId, meta: composer })
+              const processedData = processConversationEntry(rawData)
+              if (processedData) {
+                conversations.push(processedData)
               }
             } else {
+              // No conversation data found locally, will need to fetch from global DB
               metadataOnly.push({ composerId: composer.composerId, meta: composer })
             }
           } else {
@@ -691,44 +716,78 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
           }
         }
 
-        if (workspaceName.toLowerCase() === 'file-forge') {
+        // Try to fetch full conversation data from global DB for metadata-only entries
+        if (metadataOnly.length > 0) {
           const globalDbPath = getCursorDbPath()
           const globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true, readonly: true })
-          for (const meta of metadataOnly) {
-            const key = `composerData:${meta.composerId}`
-            const row = globalDb.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(key) as undefined | { value: Buffer }
-            if (row && row.value) {
-              try {
-                const rawJson = row.value.toString('utf8')
-                const parsed = JSON.parse(rawJson)
-                // Try to reconstruct conversation if only headers/map exist
-                let items: any[] = [];
-                if (Array.isArray(parsed.conversation) && parsed.conversation.length > 0) {
-                  items = parsed.conversation;
-                } else if (Array.isArray(parsed.fullConversationHeadersOnly) && parsed.conversationMap) {
-                  for (const header of parsed.fullConversationHeadersOnly) {
-                    if (header.bubbleId && parsed.conversationMap[header.bubbleId]) {
-                      items.push(parsed.conversationMap[header.bubbleId]);
+          try {
+            for (const meta of metadataOnly) {
+              const key = `composerData:${meta.composerId}`
+              const row = globalDb.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(key) as undefined | { value: Buffer }
+              if (row && row.value) {
+                try {
+                  const rawJson = row.value.toString('utf8')
+                  const parsed = JSON.parse(rawJson)
+                  // Try to reconstruct conversation if only headers/map exist
+                  let items: any[] = [];
+                  if (Array.isArray(parsed.conversation) && parsed.conversation.length > 0) {
+                    items = parsed.conversation;
+                  } else if (Array.isArray(parsed.fullConversationHeadersOnly)) {
+                    // First try conversationMap
+                    if (parsed.conversationMap && typeof parsed.conversationMap === 'object') {
+                      for (const header of parsed.fullConversationHeadersOnly) {
+                        if (header.bubbleId && parsed.conversationMap[header.bubbleId]) {
+                          items.push(parsed.conversationMap[header.bubbleId]);
+                        }
+                      }
+                    }
+                    // If still no items, try fetching individual bubble messages from global DB
+                    if (items.length === 0) {
+                      for (const header of parsed.fullConversationHeadersOnly) {
+                        if (header.bubbleId) {
+                          const bubbleKey = `bubbleId:${parsed.composerId}:${header.bubbleId}`
+                          const bubbleRow = globalDb.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(bubbleKey) as undefined | { value: Buffer }
+                          if (bubbleRow?.value) {
+                            try {
+                              const bubbleMsg = JSON.parse(bubbleRow.value.toString('utf8'))
+                              items.push(bubbleMsg)
+                            } catch {
+                              // Ignore parse errors
+                            }
+                          }
+                        }
+                      }
                     }
                   }
-                }
 
-                const hasConversation = items.length > 0;
-                console.log(`[DEBUG] file-forge global DB composerId ${meta.composerId}: found, hasConversation=${hasConversation}`)
-                if (hasConversation) {
-                  conversations.push({ ...parsed, conversation: items });
+                  const hasConversation = items.length > 0;
+                  if (hasConversation) {
+                    // Process through processConversationEntry
+                    const rawData: RawConversationData = {
+                      composerId: parsed.composerId,
+                      conversation: items,
+                      createdAt: parsed.createdAt,
+                      name: parsed.name,
+                      text: parsed.text,
+                      unifiedMode: parsed.unifiedMode,
+                      context: parsed.context
+                    }
+                    const processedData = processConversationEntry(rawData)
+                    if (processedData) {
+                      conversations.push(processedData)
+                    }
+                  }
+                } catch {
+                  // Ignore parse errors
                 }
-              } catch {
-                console.log(`[DEBUG] file-forge global DB composerId ${meta.composerId}: found, but failed to parse JSON`)
               }
-            } else {
-              console.log(`[DEBUG] file-forge global DB composerId ${meta.composerId}: NOT found`)
             }
+          } finally {
+            globalDb.close()
           }
         }
 
-        spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}" (full or metadata).`)
-        conversations.sort((a, b) => b.createdAt - a.createdAt)
+
         // Fallback: If still no conversations, try context-based global scan
         if (conversations.length === 0 && foundWorkspaceDir) {
           // Get the full workspace path from workspace.json
@@ -742,6 +801,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
               }
             } catch { }
           }
+
           if (matchPath) {
             const globalDbPath = getCursorDbPath();
             if (existsSync(globalDbPath)) {
@@ -796,10 +856,20 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
                         firstDebug = false;
                       }
                       if (hasConv && convLen > 0) {
-                        conversations.push({
-                          id: key.replace('composerData:', ''),
-                          ...parsed,
-                        });
+                        // Process through processConversationEntry
+                        const rawData: RawConversationData = {
+                          composerId: parsed.composerId || key.replace('composerData:', ''),
+                          conversation: parsed.conversation,
+                          createdAt: parsed.createdAt,
+                          name: parsed.name,
+                          text: parsed.text,
+                          unifiedMode: parsed.unifiedMode,
+                          context: parsed.context
+                        }
+                        const processedData = processConversationEntry(rawData)
+                        if (processedData) {
+                          conversations.push(processedData)
+                        }
                       } else if (Array.isArray(parsed.fullConversationHeadersOnly)) {
                         // Reconstruct conversation from headers using global bubble map
                         const items: any[] = [];
@@ -809,11 +879,20 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
                           }
                         }
                         if (items.length > 0) {
-                          conversations.push({
-                            id: key.replace('composerData:', ''),
-                            ...parsed,
+                          // Process through processConversationEntry
+                          const rawData: RawConversationData = {
+                            composerId: parsed.composerId || key.replace('composerData:', ''),
                             conversation: items,
-                          });
+                            createdAt: parsed.createdAt,
+                            name: parsed.name,
+                            text: parsed.text,
+                            unifiedMode: parsed.unifiedMode,
+                            context: parsed.context
+                          }
+                          const processedData = processConversationEntry(rawData)
+                          if (processedData) {
+                            conversations.push(processedData)
+                          }
                           console.log(`[DEBUG]   Reconstructed conversation from headers/map, length: ${items.length}`);
                         }
                       }
@@ -829,6 +908,8 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
           }
         }
 
+        conversations.sort((a, b) => b.createdAt - a.createdAt)
+        spinner.succeed(`Found ${conversations.length} conversations for workspace "${workspaceName}".`)
         return conversations
       }
     }

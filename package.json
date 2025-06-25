@@ -91,7 +91,9 @@
     "manage-archive": "node dist/index.js --manage --older-than 30d --archive",
     "test-twitter-bookmarks": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/twitter-bookmarks",
     "test-file-forge": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/file-forge",
-    "test-github-examples": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/github-examples"
+    "test-github-examples": "node ./scripts/run-in-dir.js /Users/johnlindquist/dev/github-examples",
+    "smoke-test": "npm run build && node ./test/smoke-test-select.js",
+    "verify-select": "npm run build && node ./test/verify-select-works.js"
   },
   "types": "dist/index.d.ts",
   "pnpm": {

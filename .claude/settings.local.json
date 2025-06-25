@@ -8,7 +8,13 @@
       "Bash(pnpm unlink:*)",
       "Bash(PNPM_ENABLE_PREBUILDS=true pnpm add -g @johnlindquist/cursor-history)",
       "Bash(ls:*)",
-      "Bash(pnpm approve-builds:*)"
+      "Bash(pnpm approve-builds:*)",
+      "Bash(npm run build:*)",
+      "Bash(./bin/dev.js:*)",
+      "Bash(node:*)",
+      "Bash(grep:*)",
+      "Bash(chmod:*)",
+      "Bash(npm run verify-select:*)"
     ],
     "deny": []
   }
