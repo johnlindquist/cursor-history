@@ -221,10 +221,19 @@ export function hasAssistantMessages(conversationData: ConversationData): boolea
  */
 export function generateConversationFilename(conversation: ConversationData): string {
   const date = new Date(conversation.createdAt)
-  const dateStr = date.toISOString().split('T')[0]
-  const timeStr = `${date.getHours().toString().padStart(2, '0')}${date.getMinutes().toString().padStart(2, '0')}`
+  
+  // Format: YYYY-MM-DD-HH-MM (down to the minute)
+  const year = date.getFullYear()
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, '0')
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const dateStamp = `${year}-${month}-${day}-${hours}-${minutes}`
+  
   const workspace = conversation.workspaceName || 'unnamed-workspace'
   const name = conversation.name || 'unnamed'
+  
+  // Sanitize workspace and name for filesystem
   const sanitizedWorkspace = workspace
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, '-')
@@ -234,5 +243,5 @@ export function generateConversationFilename(conversation: ConversationData): st
     .replaceAll(/[^a-z0-9]+/g, '-')
     .replaceAll(/^-|-$/g, '')
 
-  return `${sanitizedWorkspace}-${dateStr}-${timeStr}-${sanitizedName}.md`
+  return `${sanitizedWorkspace}-${dateStamp}-${sanitizedName}.md`
 }
