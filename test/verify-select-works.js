@@ -5,16 +5,17 @@
  * This test verifies that workspaces now properly return conversations
  */
 
-import { execSync } from 'child_process';
-import { listWorkspaces, getConversationsForWorkspace } from '../dist/db/extract-conversations.js';
+import { execSync } from 'node:child_process';
+
+import { getConversationsForWorkspace, listWorkspaces } from '../dist/db/extract-conversations.js';
 
 // Colors for output
 const colors = {
-  green: '\x1b[32m',
-  red: '\x1b[31m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  reset: '\x1b[0m'
+  blue: '\u001B[34m',
+  green: '\u001B[32m',
+  red: '\u001B[31m',
+  reset: '\u001B[0m',
+  yellow: '\u001B[33m'
 };
 
 function log(message, color = 'reset') {
@@ -50,13 +51,13 @@ async function main() {
         workspacesWithConversations++;
         totalConversations += conversations.length;
         results.push({
+          conversations: conversations.length,
           name: workspace.name,
-          path: workspace.path,
-          conversations: conversations.length
+          path: workspace.path
         });
         log(`  ✅ ${workspace.name}: ${conversations.length} conversations`, 'green');
       }
-    } catch (error) {
+    } catch {
       // Silently skip errored workspaces
     }
   }
@@ -72,9 +73,9 @@ async function main() {
     log('\n✅ SUCCESS: The --select command should now work properly!', 'green');
     log('\nWorkspaces you can test with --select:', 'blue');
     
-    results.slice(0, 5).forEach((ws, i) => {
+    for (const [i, ws] of results.slice(0, 5).entries()) {
       log(`  ${i + 1}. chi --select --workspace "${ws.name}"`, 'yellow');
-    });
+    }
     
     // Test one directly
     if (results.length > 0) {

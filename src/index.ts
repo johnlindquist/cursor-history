@@ -72,6 +72,11 @@ export default class CursorHistory extends Command {
       dependsOn: ['manage'],
       description: 'Archive old conversations instead of deleting them',
     }),
+    browse: Flags.boolean({
+      char: 'b',
+      description: 'Browse all workspaces, then browse conversations inside the chosen workspace',
+      exclusive: ['extract', 'search', 'manage'],
+    }),
     extract: Flags.boolean({
       char: 'e',
       description: 'Extract all conversations to markdown files',
@@ -96,11 +101,6 @@ export default class CursorHistory extends Command {
       char: 'l',
       description: 'If current directory matches a workspace, list its conversations. Otherwise, select a workspace, list its conversations, and copy one to clipboard',
       exclusive: ['extract', 'search', 'browse', 'manage'],
-    }),
-    browse: Flags.boolean({
-      char: 'b',
-      description: 'Browse all workspaces, then browse conversations inside the chosen workspace',
-      exclusive: ['extract', 'search', 'manage'],
     }),
     version: Flags.boolean({
       char: 'v',
@@ -137,7 +137,7 @@ export default class CursorHistory extends Command {
       }
     } else if (flags.browse) {
       await this.browseWorkspacesAndConversations(flags.workspace)
-      return
+      
     } else if (flags.select) {
       // Select flag: select workspace, list conversations, select one, copy to clipboard
       await this.selectWorkspaceAndConversation()
@@ -169,6 +169,86 @@ export default class CursorHistory extends Command {
         this.log('Exporting latest global conversation.')
         await this.exportConversation(latestConversation)
       }
+    }
+  }
+
+  /**
+   * Allows browsing all workspaces, then picking a conversation inside the chosen workspace.
+   * Optionally takes a pre-selected workspace name to filter the list.
+   */
+  private async browseWorkspacesAndConversations(preselect?: string): Promise<void> {
+    try {
+      const workspaces = listWorkspaces()
+
+      if (workspaces.length === 0) {
+        this.log('No workspaces found.')
+        return
+      }
+
+      let selectedWorkspace: undefined | { id: string; name: string; path: string }
+
+      if (preselect) {
+        selectedWorkspace = workspaces.find(ws => ws.name.toLowerCase() === preselect.toLowerCase())
+        if (!selectedWorkspace) {
+          this.log(`Workspace '${preselect}' not found.`)
+        }
+      }
+
+      if (!selectedWorkspace) {
+        // Prompt user to pick a workspace
+        selectedWorkspace = await search({
+          message: 'Pick a workspace:',
+          async source(term) {
+            const t = term?.toLowerCase() || ''
+            return workspaces
+              .filter(ws => !term || ws.name.toLowerCase().includes(t) || ws.path.toLowerCase().includes(t))
+              .map(ws => ({
+                description: ws.path,
+                name: ws.name,
+                value: ws,
+              }))
+          },
+        })
+      }
+
+      if (!selectedWorkspace) {
+        this.log('No workspace selected.')
+        return
+      }
+
+      const workspaceConversations = await getConversationsForWorkspace(selectedWorkspace.name)
+
+      if (workspaceConversations.length === 0) {
+        this.log(`No conversations in workspace '${selectedWorkspace.name}'.`)
+        return
+      }
+
+      const selectedConversation = await search({
+        message: 'Pick a conversation:',
+        source: async (term) => {
+          const t = term?.toLowerCase() || ''
+          return workspaceConversations
+            .map(conv => ({
+              description: new Date(conv.createdAt).toLocaleString(),
+              name: this.getDisplayName(conv),
+              value: conv,
+            }))
+            .filter(o => !term || o.name.toLowerCase().includes(t))
+        },
+      })
+
+      if (selectedConversation) {
+        await this.exportConversation(selectedConversation)
+      } else {
+        this.log('No conversation selected.')
+      }
+    } catch (error: any) {
+      if (error && error.name === 'ExitPromptError') {
+        this.log('Prompt exited by user. No selection was made.')
+        return
+      }
+
+      throw error
     }
   }
 
@@ -477,86 +557,6 @@ export default class CursorHistory extends Command {
 
       // Export the selected conversation
       await this.exportConversation(selectedConversation)
-    } catch (error: any) {
-      if (error && error.name === 'ExitPromptError') {
-        this.log('Prompt exited by user. No selection was made.')
-        return
-      }
-
-      throw error
-    }
-  }
-
-  /**
-   * Allows browsing all workspaces, then picking a conversation inside the chosen workspace.
-   * Optionally takes a pre-selected workspace name to filter the list.
-   */
-  private async browseWorkspacesAndConversations(preselect?: string): Promise<void> {
-    try {
-      const workspaces = listWorkspaces()
-
-      if (workspaces.length === 0) {
-        this.log('No workspaces found.')
-        return
-      }
-
-      let selectedWorkspace: undefined | { id: string; name: string; path: string }
-
-      if (preselect) {
-        selectedWorkspace = workspaces.find(ws => ws.name.toLowerCase() === preselect.toLowerCase())
-        if (!selectedWorkspace) {
-          this.log(`Workspace '${preselect}' not found.`)
-        }
-      }
-
-      if (!selectedWorkspace) {
-        // Prompt user to pick a workspace
-        selectedWorkspace = await search({
-          message: 'Pick a workspace:',
-          async source(term) {
-            const t = term?.toLowerCase() || ''
-            return workspaces
-              .filter(ws => !term || ws.name.toLowerCase().includes(t) || ws.path.toLowerCase().includes(t))
-              .map(ws => ({
-                description: ws.path,
-                name: ws.name,
-                value: ws,
-              }))
-          },
-        })
-      }
-
-      if (!selectedWorkspace) {
-        this.log('No workspace selected.')
-        return
-      }
-
-      const workspaceConversations = await getConversationsForWorkspace(selectedWorkspace.name)
-
-      if (workspaceConversations.length === 0) {
-        this.log(`No conversations in workspace '${selectedWorkspace.name}'.`)
-        return
-      }
-
-      const selectedConversation = await search({
-        message: 'Pick a conversation:',
-        source: async (term) => {
-          const t = term?.toLowerCase() || ''
-          return workspaceConversations
-            .map(conv => ({
-              description: new Date(conv.createdAt).toLocaleString(),
-              name: this.getDisplayName(conv),
-              value: conv,
-            }))
-            .filter(o => !term || o.name.toLowerCase().includes(t))
-        },
-      })
-
-      if (selectedConversation) {
-        await this.exportConversation(selectedConversation)
-      } else {
-        this.log('No conversation selected.')
-      }
     } catch (error: any) {
       if (error && error.name === 'ExitPromptError') {
         this.log('Prompt exited by user. No selection was made.')

@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const CHUNK_SIZE = 20000;
+const CHUNK_SIZE = 20_000;
 
 function usage() {
     console.error('Usage: bun run scripts/split-file.ts <file-to-split>');
@@ -25,7 +25,7 @@ if (!fs.existsSync(filePath)) {
     process.exit(1);
 }
 
-const fileContent = fs.readFileSync(filePath, 'utf-8');
+const fileContent = fs.readFileSync(filePath, 'utf8');
 const lines = fileContent.split('\n');
 
 if (lines.length <= CHUNK_SIZE) {

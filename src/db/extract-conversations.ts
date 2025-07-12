@@ -40,6 +40,12 @@ function processInlineDiffs(message: any): void {
 }
 */
 
+// Export these for use in optimized version
+export { decodeWorkspacePath, getCursorDbPath, getWorkspaceStoragePath, objectContainsString }
+
+// Cache for workspace lookups to avoid repeated file system operations
+const workspacePathCache = new Map<string, { dir: string; path: string }>()
+
 // --- Helper Functions for Rich Text Extraction --- 
 
 /**
@@ -120,7 +126,7 @@ function extractCodeBlocksFromNodes(nodes: RichTextNode[] | undefined): Partial<
 }
 
 // --- Type guard for NEW raw ConversationData --- 
-interface RawConversationData {
+export interface RawConversationData {
   composerId: string
   context?: unknown
   conversation: ConversationItem[] // Use new type
@@ -128,6 +134,26 @@ interface RawConversationData {
   name?: string
   text?: string
   unifiedMode?: string
+}
+
+// Union type for all possible database JSON structures
+interface DatabaseConversationData extends Partial<RawConversationData> {
+  // Allow other potential database fields
+  [key: string]: unknown
+  allComposers?: Array<{
+    [key: string]: unknown
+    composerId: string
+    context?: unknown
+    conversation?: ConversationItem[]
+    conversationMap?: Record<string, unknown>
+    createdAt?: number
+    fullConversationHeadersOnly?: Array<{ [key: string]: unknown;bubbleId: string; }>
+    name?: string
+    text?: string
+    unifiedMode?: string
+  }>
+  conversationMap?: Record<string, unknown>
+  fullConversationHeadersOnly?: Array<{ [key: string]: unknown;bubbleId: string; }>
 }
 
 function getCursorDbPath(): string {
@@ -187,6 +213,7 @@ function decodeWorkspacePath(uri: string): string {
     const path = uri.replace(/^file:\/\//, '')
     return decodeURIComponent(path)
   } catch (error) {
+    // biome-ignore lint/suspicious/noConsole: <explanation>
     console.error('Failed to decode workspace path:', error)
     return uri
   }
@@ -237,6 +264,7 @@ function findWorkspaceInfo(composerId: string): { name?: string; path?: string }
         }
       }
     } catch (error) {
+      // biome-ignore lint/suspicious/noConsole: Debug output needed
       console.error(`Error reading workspace DB ${dbPath}:`, error)
     } finally {
       db?.close()
@@ -277,6 +305,7 @@ export function listWorkspaces(): Array<{ id: string; name: string; path: string
         })
       }
     } catch (error) {
+      // biome-ignore lint/suspicious/noConsole: Debug output needed
       console.error(`Error reading workspace ${workspace.name}:`, error)
     }
   }
@@ -318,7 +347,7 @@ function getWorkspaceComposerIds(workspaceName: string): Set<string> {
     // Check if this workspace matches the target name (case-insensitive)
     // First try exact path match, then basename match, then path contains
     const pathLower = workspacePath.toLowerCase();
-    const exactPathMatch = pathLower === nameLower || pathLower === nameLower.replace(/\\/g, '/');
+    const exactPathMatch = pathLower === nameLower || pathLower === nameLower.replaceAll('\\', '/');
     const basenameMatch = currentWorkspaceName.toLowerCase() === nameLower;
     const pathContainsMatch = pathLower.includes(nameLower);
 
@@ -361,7 +390,7 @@ function getWorkspaceComposerIds(workspaceName: string): Set<string> {
 }
 
 // --- NEW HELPER: Process a single conversation entry --- 
-function processConversationEntry(rawData: RawConversationData): ConversationData | null {
+export function processConversationEntry(rawData: RawConversationData): ConversationData | null {
   const processedMessages: Message[] = []
 
   for (const item of rawData.conversation) {
@@ -450,6 +479,7 @@ function processConversationEntry(rawData: RawConversationData): ConversationDat
 export async function extractGlobalConversations(limit?: number): Promise<ConversationData[]> {
   const dbPath = getCursorDbPath()
   if (!existsSync(dbPath)) {
+    // biome-ignore lint/suspicious/noConsole: <explanation>
     console.error('Global database not found at:', dbPath)
     return []
   }
@@ -485,7 +515,7 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
     for (const row of rows) {
       try {
         const rawJson = row.value.toString('utf8')
-        const parsedJson: any = JSON.parse(rawJson) // eslint-disable-line @typescript-eslint/no-explicit-any
+        const parsedJson = JSON.parse(rawJson) as DatabaseConversationData
 
         // We need at least composerId and createdAt to proceed
         if (
@@ -495,7 +525,7 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
           continue
         }
 
-        let items: any[] = [] // eslint-disable-line @typescript-eslint/no-explicit-any
+        let items: ConversationItem[] = []
 
         // 1) Already has full conversation array
         if (Array.isArray(parsedJson.conversation) && parsedJson.conversation.length > 0) {
@@ -504,7 +534,7 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
 
         // 2) Try to rebuild from conversationMap (sometimes present)
         if (items.length === 0 && parsedJson.conversationMap && typeof parsedJson.conversationMap === 'object') {
-          items = Object.values(parsedJson.conversationMap)
+          items = Object.values(parsedJson.conversationMap) as ConversationItem[]
         }
 
         // 3) Try to rebuild from fullConversationHeadersOnly + bubbleId keys
@@ -533,12 +563,12 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
 
         const rawData: RawConversationData = {
           composerId: parsedJson.composerId,
-          createdAt: parsedJson.createdAt,
+          context: parsedJson.context,
           conversation: items,
+          createdAt: parsedJson.createdAt,
           name: parsedJson.name,
           text: parsedJson.text,
           unifiedMode: parsedJson.unifiedMode,
-          context: parsedJson.context,
         }
 
         const processedData = processConversationEntry(rawData)
@@ -565,7 +595,7 @@ export async function extractGlobalConversations(limit?: number): Promise<Conver
 /**
  * Helper: recursively search all string fields for a match
  */
-function objectContainsString(obj: any, needle: string): boolean {
+function objectContainsString(obj: unknown, needle: string): boolean {
   if (!obj) return false;
   if (typeof obj === 'string') return obj.toLowerCase().includes(needle);
   if (Array.isArray(obj)) return obj.some((el) => objectContainsString(el, needle));
@@ -586,36 +616,46 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
     return []
   }
 
-  const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
+  // Check cache first
   let foundWorkspaceDir: null | string = null
-
-  for (const workspace of workspaces) {
-    if (!workspace.isDirectory()) continue
-    const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
-    if (!existsSync(workspaceJsonPath)) continue
-    let workspacePath = ''
-    let currentWorkspaceName = ''
-    try {
-      const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
-      if (workspaceData.folder) {
-        workspacePath = decodeWorkspacePath(workspaceData.folder)
-        currentWorkspaceName = basename(workspacePath)
-      } else {
+  
+  if (workspacePathCache.has(nameLower)) {
+    const cached = workspacePathCache.get(nameLower)!
+    foundWorkspaceDir = cached.dir
+  } else {
+    // Scan workspaces
+    const workspaces = readdirSync(workspaceStoragePath, { withFileTypes: true })
+    
+    for (const workspace of workspaces) {
+      if (!workspace.isDirectory()) continue
+      const workspaceJsonPath = join(workspaceStoragePath, workspace.name, 'workspace.json')
+      if (!existsSync(workspaceJsonPath)) continue
+      let workspacePath = ''
+      let currentWorkspaceName = ''
+      try {
+        const workspaceData = JSON.parse(readFileSync(workspaceJsonPath, 'utf8'))
+        if (workspaceData.folder) {
+          workspacePath = decodeWorkspacePath(workspaceData.folder)
+          currentWorkspaceName = basename(workspacePath)
+        } else {
+          continue
+        }
+      } catch {
         continue
       }
-    } catch {
-      continue
-    }
 
-    // First try exact path match, then basename match, then path contains
-    const pathLower = workspacePath.toLowerCase();
-    const exactPathMatch = pathLower === nameLower || pathLower === nameLower.replace(/\\/g, '/');
-    const basenameMatch = currentWorkspaceName.toLowerCase() === nameLower;
-    const pathContainsMatch = pathLower.includes(nameLower);
+      // First try exact path match, then basename match, then path contains
+      const pathLower = workspacePath.toLowerCase();
+      const exactPathMatch = pathLower === nameLower || pathLower === nameLower.replaceAll('\\', '/');
+      const basenameMatch = currentWorkspaceName.toLowerCase() === nameLower;
+      const pathContainsMatch = pathLower.includes(nameLower);
 
-    if (exactPathMatch || basenameMatch || pathContainsMatch) {
-      foundWorkspaceDir = workspace.name
-      break
+      if (exactPathMatch || basenameMatch || pathContainsMatch) {
+        foundWorkspaceDir = workspace.name
+        // Cache the result
+        workspacePathCache.set(nameLower, { dir: foundWorkspaceDir, path: workspacePath })
+        break
+      }
     }
   }
 
@@ -642,7 +682,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
     }
 
     if (result?.value) {
-      const parsed = JSON.parse(result.value) as any // eslint-disable-line @typescript-eslint/no-explicit-any
+      const parsed = JSON.parse(result.value) as DatabaseConversationData
 
       if (parsed && Array.isArray(parsed.allComposers)) {
         const metadataOnly: { composerId: string; meta: ConversationData }[] = []
@@ -651,12 +691,12 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
             // Process the conversation through processConversationEntry
             const rawData: RawConversationData = {
               composerId: composer.composerId,
+              context: composer.context,
               conversation: composer.conversation,
-              createdAt: composer.createdAt,
+              createdAt: composer.createdAt || Date.now(),
               name: composer.name,
               text: composer.text,
-              unifiedMode: composer.unifiedMode,
-              context: composer.context
+              unifiedMode: composer.unifiedMode
             }
             const processedData = processConversationEntry(rawData)
             if (processedData) {
@@ -664,15 +704,16 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
             }
           } else if (composer.fullConversationHeadersOnly) {
             // Try to reconstruct conversation from workspace DB bubbleId keys
-            const items: unknown[] = []
+            const items: ConversationItem[] = []
             // First try to get messages from conversationMap if it exists
             if (composer.conversationMap && typeof composer.conversationMap === 'object') {
               for (const header of composer.fullConversationHeadersOnly) {
                 if (header.bubbleId && composer.conversationMap[header.bubbleId]) {
-                  items.push(composer.conversationMap[header.bubbleId])
+                  items.push(composer.conversationMap[header.bubbleId] as ConversationItem)
                 }
               }
             }
+
             // If no conversationMap or items, try to fetch from DB
             if (items.length === 0) {
               for (const header of composer.fullConversationHeadersOnly) {
@@ -681,10 +722,10 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
                   const bubbleKey = `bubbleId:${composer.composerId}:${header.bubbleId}`
                   const bubbleRow = (db.prepare('SELECT value FROM ItemTable WHERE key = ?').get(bubbleKey) ??
                     db.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(bubbleKey)) as undefined | { value: Buffer | string }
-                  if (bubbleRow && bubbleRow.value) {
+                  if (bubbleRow?.value) {
                     try {
                       const bubbleMsg = JSON.parse(typeof bubbleRow.value === 'string' ? bubbleRow.value : bubbleRow.value.toString('utf8'))
-                      items.push(bubbleMsg)
+                      items.push(bubbleMsg as ConversationItem)
                     } catch {
                       // Ignore parse errors
                     }
@@ -692,16 +733,17 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
                 }
               }
             }
+
             if (items.length > 0) {
               // Process the reconstructed conversation through processConversationEntry
               const rawData: RawConversationData = {
                 composerId: composer.composerId,
+                context: composer.context,
                 conversation: items as ConversationItem[],
-                createdAt: composer.createdAt,
+                createdAt: composer.createdAt || Date.now(),
                 name: composer.name,
                 text: composer.text,
-                unifiedMode: composer.unifiedMode,
-                context: composer.context
+                unifiedMode: composer.unifiedMode
               }
               const processedData = processConversationEntry(rawData)
               if (processedData) {
@@ -709,10 +751,10 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
               }
             } else {
               // No conversation data found locally, will need to fetch from global DB
-              metadataOnly.push({ composerId: composer.composerId, meta: composer })
+              metadataOnly.push({ composerId: composer.composerId, meta: composer as any })
             }
           } else {
-            metadataOnly.push({ composerId: composer.composerId, meta: composer })
+            metadataOnly.push({ composerId: composer.composerId, meta: composer as any })
           }
         }
 
@@ -724,7 +766,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
             for (const meta of metadataOnly) {
               const key = `composerData:${meta.composerId}`
               const row = globalDb.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(key) as undefined | { value: Buffer }
-              if (row && row.value) {
+              if (row?.value) {
                 try {
                   const rawJson = row.value.toString('utf8')
                   const parsed = JSON.parse(rawJson)
@@ -737,10 +779,11 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
                     if (parsed.conversationMap && typeof parsed.conversationMap === 'object') {
                       for (const header of parsed.fullConversationHeadersOnly) {
                         if (header.bubbleId && parsed.conversationMap[header.bubbleId]) {
-                          items.push(parsed.conversationMap[header.bubbleId]);
+                          items.push(parsed.conversationMap[header.bubbleId] as ConversationItem);
                         }
                       }
                     }
+
                     // If still no items, try fetching individual bubble messages from global DB
                     if (items.length === 0) {
                       for (const header of parsed.fullConversationHeadersOnly) {
@@ -750,7 +793,7 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
                           if (bubbleRow?.value) {
                             try {
                               const bubbleMsg = JSON.parse(bubbleRow.value.toString('utf8'))
-                              items.push(bubbleMsg)
+                              items.push(bubbleMsg as ConversationItem)
                             } catch {
                               // Ignore parse errors
                             }
@@ -765,12 +808,12 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
                     // Process through processConversationEntry
                     const rawData: RawConversationData = {
                       composerId: parsed.composerId,
+                      context: parsed.context,
                       conversation: items,
                       createdAt: parsed.createdAt,
                       name: parsed.name,
                       text: parsed.text,
-                      unifiedMode: parsed.unifiedMode,
-                      context: parsed.context
+                      unifiedMode: parsed.unifiedMode
                     }
                     const processedData = processConversationEntry(rawData)
                     if (processedData) {
@@ -808,97 +851,112 @@ export async function getConversationsForWorkspace(workspaceName: string): Promi
               let globalDb: BetterSqlite3.Database | null = null;
               try {
                 globalDb = new BetterSqlite3(globalDbPath, { fileMustExist: true });
-                const rows = globalDb.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'").all();
-                // --- Build global bubbleId -> message map ---
-                const globalBubbleMap: Record<string, any> = {};
-                for (const row of rows) {
+                
+                // First pass: find matching conversations and check if we need bubble reconstruction
+                const stmt = globalDb.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'");
+                const matchingComposers: Array<{ key: string; parsed: DatabaseConversationData }> = [];
+                let needsBubbleReconstruction = false;
+                
+                // Use iterator for better memory efficiency
+                for (const row of stmt.iterate() as IterableIterator<{ key: string; value: Buffer }>) {
                   try {
-                    const { key, value } = row as { key: string, value: Buffer };
-                    const rawJson = value.toString('utf8');
+                    const rawJson = row.value.toString('utf8');
+                    
+                    // Quick pre-check to avoid parsing non-matching entries
+                    if (!rawJson.toLowerCase().includes(matchPath.toLowerCase())) continue;
+                    
                     const parsed = JSON.parse(rawJson);
-                    if (parsed && typeof parsed === 'object') {
-                      // Add all messages from conversation array
-                      if (Array.isArray(parsed.conversation)) {
-                        for (const msg of parsed.conversation) {
-                          if (msg && msg.bubbleId) globalBubbleMap[msg.bubbleId] = msg;
-                        }
-                      }
-                      // Add all messages from conversationMap
-                      if (parsed.conversationMap && typeof parsed.conversationMap === 'object') {
-                        for (const [bid, msg] of Object.entries(parsed.conversationMap)) {
-                          if (msg && typeof msg === 'object') globalBubbleMap[bid] = msg;
-                        }
+                    if (objectContainsString(parsed, matchPath)) {
+                      matchingComposers.push({ key: row.key, parsed });
+                      
+                      // Check if this composer needs bubble reconstruction
+                      if (Array.isArray(parsed.fullConversationHeadersOnly) && parsed.fullConversationHeadersOnly.length > 0 &&
+                          (!parsed.conversation || parsed.conversation.length === 0)) {
+                        needsBubbleReconstruction = true;
                       }
                     }
                   } catch { }
                 }
-                // --- End global bubble map build ---
-                let firstDebug = true;
-                for (const row of rows) {
-                  try {
-                    const { key, value } = row as { key: string, value: Buffer };
-                    const rawJson = value.toString('utf8');
-                    const parsed = JSON.parse(rawJson);
-                    if (objectContainsString(parsed, matchPath)) {
-                      const hasConv = parsed.conversation && Array.isArray(parsed.conversation);
-                      const convLen = hasConv ? parsed.conversation.length : 0;
-                      if (firstDebug) {
-                        console.log(`[DEBUG] Matched composerData: ${key} for workspace path: ${matchPath}`);
-                        if (Array.isArray(parsed.fullConversationHeadersOnly)) {
-                          console.log(`[DEBUG]   fullConversationHeadersOnly length: ${parsed.fullConversationHeadersOnly.length}`);
-                          if (parsed.fullConversationHeadersOnly.length > 0) {
-                            const headerIds = parsed.fullConversationHeadersOnly.slice(0, 10).map((h: any) => h.bubbleId).filter(Boolean);
-                            console.log(`[DEBUG]   first 10 header bubbleIds: ${headerIds.join(', ')}`);
-                          }
-                        }
-                        const globalBubbleKeys = Object.keys(globalBubbleMap).slice(0, 10);
-                        console.log(`[DEBUG]   first 10 global bubbleIds: ${globalBubbleKeys.join(', ')}`);
-                        firstDebug = false;
+                
+                // Only build bubble map if needed
+                const globalBubbleMap: Record<string, ConversationItem> = {};
+                if (needsBubbleReconstruction) {
+                  // Build bubble map only from the matching composers' bubble IDs
+                  const neededBubbleIds = new Set<string>();
+                  for (const { parsed } of matchingComposers) {
+                    if (Array.isArray(parsed.fullConversationHeadersOnly)) {
+                      for (const header of parsed.fullConversationHeadersOnly) {
+                        if (header.bubbleId) neededBubbleIds.add(header.bubbleId);
                       }
-                      if (hasConv && convLen > 0) {
-                        // Process through processConversationEntry
-                        const rawData: RawConversationData = {
-                          composerId: parsed.composerId || key.replace('composerData:', ''),
-                          conversation: parsed.conversation,
-                          createdAt: parsed.createdAt,
-                          name: parsed.name,
-                          text: parsed.text,
-                          unifiedMode: parsed.unifiedMode,
-                          context: parsed.context
-                        }
-                        const processedData = processConversationEntry(rawData)
-                        if (processedData) {
-                          conversations.push(processedData)
-                        }
-                      } else if (Array.isArray(parsed.fullConversationHeadersOnly)) {
-                        // Reconstruct conversation from headers using global bubble map
-                        const items: any[] = [];
-                        for (const header of parsed.fullConversationHeadersOnly) {
-                          if (header.bubbleId && globalBubbleMap[header.bubbleId]) {
-                            items.push(globalBubbleMap[header.bubbleId]);
+                    }
+                  }
+                  
+                  // Fetch only the needed bubble messages
+                  const bubbleStmt = globalDb.prepare('SELECT value FROM cursorDiskKV WHERE key = ?');
+                  for (const composerData of matchingComposers) {
+                    const {parsed} = composerData;
+                    if (Array.isArray(parsed.fullConversationHeadersOnly)) {
+                      for (const header of parsed.fullConversationHeadersOnly) {
+                        if (header.bubbleId && neededBubbleIds.has(header.bubbleId)) {
+                          const bubbleKey = `bubbleId:${parsed.composerId}:${header.bubbleId}`;
+                          const bubbleRow = bubbleStmt.get(bubbleKey) as undefined | { value: Buffer };
+                          if (bubbleRow?.value) {
+                            try {
+                              const bubbleMsg = JSON.parse(bubbleRow.value.toString('utf8'));
+                              globalBubbleMap[header.bubbleId] = bubbleMsg;
+                            } catch { }
                           }
-                        }
-                        if (items.length > 0) {
-                          // Process through processConversationEntry
-                          const rawData: RawConversationData = {
-                            composerId: parsed.composerId || key.replace('composerData:', ''),
-                            conversation: items,
-                            createdAt: parsed.createdAt,
-                            name: parsed.name,
-                            text: parsed.text,
-                            unifiedMode: parsed.unifiedMode,
-                            context: parsed.context
-                          }
-                          const processedData = processConversationEntry(rawData)
-                          if (processedData) {
-                            conversations.push(processedData)
-                          }
-                          console.log(`[DEBUG]   Reconstructed conversation from headers/map, length: ${items.length}`);
                         }
                       }
                     }
-                  } catch (e) {
-                    // ignore parse errors
+                  }
+                }
+                
+                // Process matching composers
+                for (const { key, parsed } of matchingComposers) {
+                  const hasConv = parsed.conversation && Array.isArray(parsed.conversation);
+                  const convLen = hasConv ? parsed.conversation!.length : 0;
+                  
+                  if (hasConv && convLen > 0) {
+                    // Process through processConversationEntry
+                    const rawData: RawConversationData = {
+                      composerId: parsed.composerId || key.replace('composerData:', ''),
+                      context: parsed.context,
+                      conversation: parsed.conversation!,
+                      createdAt: parsed.createdAt || Date.now(),
+                      name: parsed.name,
+                      text: parsed.text,
+                      unifiedMode: parsed.unifiedMode
+                    }
+                    const processedData = processConversationEntry(rawData)
+                    if (processedData) {
+                      conversations.push(processedData)
+                    }
+                  } else if (Array.isArray(parsed.fullConversationHeadersOnly) && needsBubbleReconstruction) {
+                    // Reconstruct conversation from headers using global bubble map
+                    const items: ConversationItem[] = [];
+                    for (const header of parsed.fullConversationHeadersOnly) {
+                      if (header.bubbleId && globalBubbleMap[header.bubbleId]) {
+                        items.push(globalBubbleMap[header.bubbleId]);
+                      }
+                    }
+
+                    if (items.length > 0) {
+                      // Process through processConversationEntry
+                      const rawData: RawConversationData = {
+                        composerId: parsed.composerId || key.replace('composerData:', ''),
+                        context: parsed.context,
+                        conversation: items,
+                        createdAt: parsed.createdAt || Date.now(),
+                        name: parsed.name,
+                        text: parsed.text,
+                        unifiedMode: parsed.unifiedMode
+                      }
+                      const processedData = processConversationEntry(rawData)
+                      if (processedData) {
+                        conversations.push(processedData)
+                      }
+                    }
                   }
                 }
               } finally {

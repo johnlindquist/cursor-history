@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
-import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const GLOBAL_DB = join(
     homedir(),
@@ -28,6 +28,7 @@ function searchObject(obj: any, needles: string[]): string[] {
             for (const v of Object.values(val)) recur(v);
         }
     }
+
     recur(obj);
     return found;
 }
@@ -49,6 +50,7 @@ function main() {
                 for (const match of matches) {
                     console.log(`  Match: ${match.slice(0, 200)}`);
                 }
+
                 // Print all string fields in the object
                 const allStrings: string[] = [];
                 const collectStrings = (obj: any, depth = 0) => {
@@ -60,16 +62,18 @@ function main() {
                         for (const v of Object.values(obj)) collectStrings(v, depth + 1);
                     }
                 };
+
                 collectStrings(parsed);
                 console.log('  All string fields:');
                 for (const s of allStrings) {
                     console.log('    ', s);
                 }
             }
-        } catch (e) {
+        } catch {
             // skip
         }
     }
+
     console.log(`\nTotal composerData entries with matches: ${matchCount}`);
 }
 

@@ -1,10 +1,8 @@
 import Database from 'better-sqlite3';
-import { existsSync } from 'node:fs';
+import { existsSync , readdirSync, readFileSync } from 'node:fs';
 import os, { platform } from 'node:os';
-import path, { join } from 'node:path';
+import path, { basename , join } from 'node:path';
 import { inspect } from 'node:util'; // Import inspect
-import { readdirSync, readFileSync } from 'node:fs';
-import { basename } from 'node:path';
 
 // Configuration
 const targetKeys = [
@@ -262,14 +260,21 @@ function getWorkspaceStoragePath(): string {
     const os = platform();
     const home = os.homedir();
     switch (os.platform()) {
-        case 'darwin':
+        case 'darwin': {
             return join(home, 'Library/Application Support/Cursor/User/workspaceStorage');
-        case 'linux':
+        }
+
+        case 'linux': {
             return join(home, '.config/Cursor/User/workspaceStorage');
-        case 'win32':
+        }
+
+        case 'win32': {
             return join(process.env.APPDATA || join(home, 'AppData/Roaming'), 'Cursor/User/workspaceStorage');
-        default:
+        }
+
+        default: {
             throw new Error(`Unsupported platform: ${os}`);
+        }
     }
 }
 
@@ -306,9 +311,11 @@ function getWorkspaceComposerIds(workspaceName: string): Set<string> {
             } catch {
                 continue;
             }
+
             if (currentWorkspaceName.toLowerCase() !== nameLower && !workspacePath.toLowerCase().includes(nameLower)) {
                 continue;
             }
+
             const dbPath = join(workspaceStoragePath, workspace.name, 'state.vscdb');
             if (!existsSync(dbPath)) continue;
             let db: Database.Database | null = null;
@@ -331,6 +338,7 @@ function getWorkspaceComposerIds(workspaceName: string): Set<string> {
             }
         }
     } catch { }
+
     return composerIds;
 }
 
@@ -340,6 +348,7 @@ function printComposerContextsForWorkspace(workspaceName: string) {
         console.log(`[DIAG] No composer IDs found for workspace: ${workspaceName}`);
         return;
     }
+
     const dbPath = getDatabasePath();
     let db: Database.Database | null = null;
     try {
@@ -359,25 +368,27 @@ function printComposerContextsForWorkspace(workspaceName: string) {
                     } else {
                         console.log(`[DIAG]   context: <none>`);
                     }
+
                     if ('fileSelections' in data) {
                         console.log(`[DIAG]   fileSelections: ${inspect(data.fileSelections, { depth: 3 })}`);
                     } else {
                         console.log(`[DIAG]   fileSelections: <none>`);
                     }
+
                     if ('conversation' in data && Array.isArray(data.conversation)) {
                         console.log(`[DIAG]   conversation.length: ${data.conversation.length}`);
                     } else {
                         console.log(`[DIAG]   conversation: <none>`);
                     }
-                } catch (err) {
-                    console.log(`[DIAG]   Error parsing composerData for ${id}:`, err);
+                } catch (error) {
+                    console.log(`[DIAG]   Error parsing composerData for ${id}:`, error);
                 }
             } else {
                 console.log(`[DIAG] composerData not found in global DB for composerId: ${id}`);
             }
         }
-    } catch (err) {
-        console.log(`[DIAG] Error opening global DB:`, err);
+    } catch (error) {
+        console.log(`[DIAG] Error opening global DB:`, error);
     } finally {
         db?.close();
     }
@@ -391,6 +402,7 @@ if (process.argv.includes('--diagnose-workspace')) {
         console.error('Usage: pnpm tsx scripts/investigation/explore_global_kv.ts --diagnose-workspace <workspaceName>');
         process.exit(1);
     }
+
     printComposerContextsForWorkspace(workspaceName);
     process.exit(0);
 } 

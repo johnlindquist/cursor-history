@@ -1,20 +1,27 @@
-import { readdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { platform, homedir } from 'node:os';
 import Database from 'better-sqlite3';
+import { existsSync, readdirSync } from 'node:fs';
+import { homedir, platform } from 'node:os';
+import { join } from 'node:path';
 
 function getWorkspaceStoragePath(): string {
     const os = platform();
     const home = homedir();
     switch (os) {
-        case 'darwin':
+        case 'darwin': {
             return join(home, 'Library/Application Support/Cursor/User/workspaceStorage');
-        case 'linux':
+        }
+
+        case 'linux': {
             return join(home, '.config/Cursor/User/workspaceStorage');
-        case 'win32':
+        }
+
+        case 'win32': {
             return join(process.env.APPDATA || join(home, 'AppData/Roaming'), 'Cursor/User/workspaceStorage');
-        default:
+        }
+
+        default: {
             throw new Error(`Unsupported platform: ${os}`);
+        }
     }
 }
 
@@ -24,6 +31,7 @@ function previewValue(val: Buffer): string {
         if (str.trim().startsWith('{') || str.trim().startsWith('[')) {
             return str.slice(0, 200);
         }
+
         return str.slice(0, 200);
     } catch {
         return '[binary]';
@@ -46,13 +54,14 @@ function main() {
                 try {
                     rows = db.prepare(`SELECT key, value FROM ${table}`).all();
                 } catch { continue; }
+
                 for (const row of rows) {
                     const preview = previewValue(row.value);
-                    console.log(`[${dir}] ${table}: ${row.key}\n  Preview: ${preview.replace(/\n/g, ' ')}\n`);
+                    console.log(`[${dir}] ${table}: ${row.key}\n  Preview: ${preview.replaceAll('\n', ' ')}\n`);
                 }
             }
-        } catch (e) {
-            console.error(`[${dir}] Error opening DB:`, e);
+        } catch (error) {
+            console.error(`[${dir}] Error opening DB:`, error);
         } finally {
             db?.close();
         }

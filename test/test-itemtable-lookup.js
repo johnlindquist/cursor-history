@@ -5,23 +5,30 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3';
-import { existsSync, readdirSync, readFileSync } from 'fs';
-import { join, basename } from 'path';
-import { platform } from 'os';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { platform } from 'node:os';
+import { basename, join } from 'node:path';
 
 function getWorkspaceStoragePath() {
   const os = platform();
   const home = process.env.HOME || process.env.USERPROFILE || '';
   
   switch (os) {
-    case 'darwin':
+    case 'darwin': {
       return join(home, 'Library/Application Support/Cursor/User/workspaceStorage');
-    case 'linux':
+    }
+
+    case 'linux': {
       return join(home, '.config/Cursor/User/workspaceStorage');
-    case 'win32':
+    }
+
+    case 'win32': {
       return join(process.env.APPDATA || join(home, 'AppData/Roaming'), 'Cursor/User/workspaceStorage');
-    default:
+    }
+
+    default: {
       throw new Error(`Unsupported platform: ${os}`);
+    }
   }
 }
 
@@ -29,7 +36,7 @@ function decodeWorkspacePath(uri) {
   try {
     const path = uri.replace(/^file:\/\//, '');
     return decodeURIComponent(path);
-  } catch (error) {
+  } catch {
     return uri;
   }
 }
@@ -91,21 +98,21 @@ for (const workspace of workspaces) {
       const itemTableRow = db.prepare('SELECT value FROM ItemTable WHERE key = ?').get(bubbleKey);
       if (itemTableRow?.value) {
         foundInItemTable++;
-        console.log(`✅ Found in ItemTable: ${bubbleKey.substring(0, 50)}...`);
+        console.log(`✅ Found in ItemTable: ${bubbleKey.slice(0, 50)}...`);
       } else {
         // Try cursorDiskKV
         const cursorDiskRow = db.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get(bubbleKey);
         if (cursorDiskRow?.value) {
           foundInCursorDiskKV++;
-          console.log(`⚠️  Found in cursorDiskKV (old location): ${bubbleKey.substring(0, 50)}...`);
+          console.log(`⚠️  Found in cursorDiskKV (old location): ${bubbleKey.slice(0, 50)}...`);
         } else {
-          console.log(`❌ Not found in either table: ${bubbleKey.substring(0, 50)}...`);
+          console.log(`❌ Not found in either table: ${bubbleKey.slice(0, 50)}...`);
         }
       }
     }
     
     db.close();
-  } catch (error) {
+  } catch {
     if (db) db.close();
   }
 }

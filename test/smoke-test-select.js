@@ -8,18 +8,19 @@
  * 3. Tests --select on a random workspace with conversations
  */
 
-import { execSync } from 'child_process';
-import path from 'path';
-import fs from 'fs';
-import { listWorkspaces, getConversationsForWorkspace } from '../dist/db/extract-conversations.js';
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { getConversationsForWorkspace, listWorkspaces } from '../dist/db/extract-conversations.js';
 
 // Colors for output
 const colors = {
-  green: '\x1b[32m',
-  red: '\x1b[31m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  reset: '\x1b[0m'
+  blue: '\u001B[34m',
+  green: '\u001B[32m',
+  red: '\u001B[31m',
+  reset: '\u001B[0m',
+  yellow: '\u001B[33m'
 };
 
 function log(message, color = 'reset') {
@@ -33,9 +34,9 @@ function runCommand(command, options = {}) {
       stdio: 'pipe',
       ...options
     });
-    return { success: true, output };
+    return { output, success: true };
   } catch (error) {
-    return { success: false, output: error.stdout || error.message, error };
+    return { error, output: error.stdout || error.message, success: false };
   }
 }
 
@@ -72,7 +73,7 @@ async function findWorkspaceWithConversations() {
           conversationCount: conversations.length
         });
       }
-    } catch (error) {
+    } catch {
       // Skip workspaces that error out
     }
   }
@@ -87,7 +88,7 @@ async function testSelectOnWorkspace(workspaceName) {
   
   // Run chi --select with the workspace flag
   const result = runCommand(`node ./bin/run.js --select --workspace "${workspaceName}"`, {
-    timeout: 30000 // 30 second timeout
+    timeout: 30_000 // 30 second timeout
   });
   
   if (!result.success) {
@@ -97,7 +98,7 @@ async function testSelectOnWorkspace(workspaceName) {
   }
   
   // Check if the output indicates success
-  const output = result.output;
+  const {output} = result;
   const hasFoundConversations = output.includes('Found') && output.includes('conversations') && !output.includes('Found 0 conversations');
   const hasNoConversationsMessage = output.includes('No conversations found');
   
@@ -111,11 +112,12 @@ async function testSelectOnWorkspace(workspaceName) {
     }
     
     return true;
-  } else {
+  }
+ 
     log(`❌ No conversations found in ${workspaceName} (but they should exist!)`, 'red');
     log(`Output: ${output}`, 'yellow');
     return false;
-  }
+  
 }
 
 async function runSmokeTest() {
@@ -130,6 +132,7 @@ async function runSmokeTest() {
     log(buildResult.output, 'red');
     process.exit(1);
   }
+
   log('✅ Build successful', 'green');
   
   // Find workspaces with conversations
@@ -149,9 +152,9 @@ async function runSmokeTest() {
     .slice(0, 5);
   
   log('\nTop workspaces by conversation count:', 'yellow');
-  topWorkspaces.forEach((ws, i) => {
+  for (const [i, ws] of topWorkspaces.entries()) {
     log(`  ${i + 1}. ${ws.name} (${ws.conversationCount} conversations)`, 'yellow');
-  });
+  }
   
   // Test --select on a random workspace with conversations
   const randomIndex = Math.floor(Math.random() * Math.min(10, workspacesWithConversations.length));

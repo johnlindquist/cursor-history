@@ -1,18 +1,19 @@
-import { runCommand } from '@oclif/test'
-import sinon from 'sinon'
 import * as searchModule from '@inquirer/search'
-import * as dbModule from '../../../dist/db/extract-conversations.js'
-import clipboardy from 'clipboardy'
+import { runCommand } from '@oclif/test'
 import { expect } from 'chai'
+import clipboardy from 'clipboardy'
+import sinon from 'sinon'
+
+import * as dbModule from '../../../dist/db/extract-conversations.js'
 
 describe('chi --browse', () => {
     it('runs chi --browse and lets user pick', async () => {
         const workspace = { id: '1', name: 'my-ws', path: '/tmp/ws' }
         const conversation = {
+            conversation: [],
+            createdAt: Date.now(),
             id: 'conv1',
             name: 'Test conv',
-            createdAt: Date.now(),
-            conversation: [],
             text: 'hello',
             workspaceName: 'my-ws'
         } as any
